@@ -1,0 +1,294 @@
+/* Network Defenders appliance UI.
+   Brand values taken from networkdefenders.com: accent #2ea3f2, CTA #ffa727,
+   Open Sans. #2ea3f2 is only 2.75:1 on white, so it is never used for text —
+   text uses the darker step of the same hue (#12609c, 6.61:1). */
+
+:root {
+  --brand:        #2ea3f2;
+  --brand-deep:   #12609c;
+  --brand-dark:   #0b4a78;
+  --cta:          #ffa727;
+  --cta-ink:      #111111;
+
+  --page:         #f4f7fa;
+  --surface:      #ffffff;
+  --ink:          #1c1c1c;
+  --ink-2:        #52514e;
+  --muted:        #898781;
+  --rule:         #e3e8ee;
+
+  --sev-critical: #d03b3b;
+  --sev-high:     #ec835a;
+  --sev-medium:   #fab219;
+  --sev-low:      #0ca30c;
+  --sev-info:     #898781;
+
+  --radius: 10px;
+  --font: "Open Sans", -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: var(--font);
+  background: var(--page);
+  color: var(--ink);
+  line-height: 1.55;
+  font-size: 15px;
+}
+
+a { color: var(--brand-deep); }
+
+.wrap { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+
+/* ---------------------------------------------------------------- header */
+
+.topbar {
+  background: var(--surface);
+  border-bottom: 3px solid var(--brand);
+  padding: 14px 0;
+}
+.topbar .wrap { display: flex; align-items: center; gap: 14px; }
+
+.mark { flex: none; }
+.brand-text { display: flex; flex-direction: column; line-height: 1.2; }
+.brand-name { font-size: 19px; font-weight: 700; letter-spacing: -0.2px; }
+.brand-sub { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.9px; }
+.topbar nav { margin-left: auto; display: flex; gap: 18px; font-size: 14px; }
+
+h1 { font-size: 24px; margin: 26px 0 4px; letter-spacing: -0.3px; }
+h2 { font-size: 17px; margin: 28px 0 12px; letter-spacing: -0.2px; }
+.lede { color: var(--ink-2); margin: 0 0 22px; }
+
+/* ---------------------------------------------------------------- cards */
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 22px;
+  margin-bottom: 18px;
+}
+
+label { display: block; font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.hint { font-weight: 400; color: var(--ink-2); font-size: 12.5px; margin-bottom: 8px; }
+
+textarea, input[type=text], input[type=password], select {
+  width: 100%;
+  font-family: inherit;
+  font-size: 14px;
+  padding: 10px 12px;
+  border: 1px solid #cfd8e3;
+  border-radius: 8px;
+  background: #fff;
+  color: var(--ink);
+}
+textarea { min-height: 132px; resize: vertical; font-family: ui-monospace, "Courier New", monospace; }
+textarea:focus, input:focus, select:focus {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+  border-color: var(--brand);
+}
+.field { margin-bottom: 18px; }
+.row { display: flex; gap: 18px; flex-wrap: wrap; }
+.row > * { flex: 1 1 240px; }
+
+.btn {
+  display: inline-block;
+  background: var(--cta);
+  color: var(--cta-ink);
+  font-weight: 700;
+  font-size: 14.5px;
+  border: none;
+  border-radius: 8px;
+  padding: 11px 22px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.btn:hover { filter: brightness(0.95); }
+.btn-secondary {
+  background: transparent;
+  color: var(--brand-deep);
+  border: 1.5px solid var(--brand);
+  font-weight: 600;
+}
+
+/* Sets its own ink rather than inheriting --ink: the background is a fixed
+   light pink, so inherited text would invert to near-white in dark mode and
+   disappear (measured 1.04:1). */
+.error {
+  background: #fdecec;
+  color: #7f1d1d;
+  border-left: 4px solid var(--sev-critical);
+  padding: 11px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+/* ---------------------------------------------------------------- tables */
+
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th {
+  text-align: left;
+  font-size: 11.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.7px;
+  color: var(--ink-2);
+  border-bottom: 1px solid var(--rule);
+  padding: 8px 10px;
+}
+td { padding: 9px 10px; border-bottom: 1px solid #f0f3f7; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.mono { font-family: ui-monospace, "Courier New", monospace; font-size: 13px; }
+
+/* ------------------------------------------------------------ stat tiles */
+
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 14px; }
+.tile {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+}
+.tile .n { font-size: 30px; font-weight: 700; letter-spacing: -1px; line-height: 1.1; }
+.tile .k { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.7px; }
+
+/* --------------------------------------------------------------- severity
+   Status colour never carries meaning alone: every badge pairs the swatch
+   with the severity word, and bar values sit in ink outside the fill. */
+
+.sev-dot {
+  display: inline-block; width: 10px; height: 10px; border-radius: 3px;
+  flex: none;
+}
+.badge {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.6px; color: var(--ink);
+  background: #f4f6f9; border: 1px solid var(--rule);
+  padding: 3px 10px 3px 8px; border-radius: 999px;
+  white-space: nowrap;
+}
+.s-critical { background: var(--sev-critical); }
+.s-high     { background: var(--sev-high); }
+.s-medium   { background: var(--sev-medium); }
+.s-low      { background: var(--sev-low); }
+.s-info     { background: var(--sev-info); }
+
+/* bar chart: 4px rounded data-end, anchored left, 2px gap between rows */
+.chart { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+.chart-row { display: grid; grid-template-columns: 118px 1fr 44px; align-items: center; gap: 12px; }
+.chart-label { font-size: 13px; color: var(--ink-2); display: flex; align-items: center; gap: 8px; }
+.chart-track { background: #eef2f7; border-radius: 4px; height: 20px; }
+.chart-fill { height: 20px; border-radius: 4px; min-width: 3px; }
+.chart-val { font-size: 14px; font-weight: 700; text-align: right; font-variant-numeric: tabular-nums; }
+
+/* -------------------------------------------------------------- findings */
+
+.finding {
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  margin-bottom: 12px;
+  background: var(--surface);
+}
+.finding-head { display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.finding-title { font-weight: 700; font-size: 15.5px; flex: 1 1 320px; }
+.finding p { margin: 10px 0 0; color: var(--ink-2); font-size: 14px; }
+.remediation {
+  margin-top: 12px; padding: 11px 13px;
+  background: #f2f8fe; border-left: 3px solid var(--brand); border-radius: 6px;
+  font-size: 13.5px; color: var(--ink);
+}
+.assets { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 6px; }
+.asset {
+  font-family: ui-monospace, "Courier New", monospace;
+  font-size: 12px; background: #f4f6f9; border: 1px solid var(--rule);
+  padding: 2px 8px; border-radius: 5px; color: var(--ink-2);
+}
+
+.sev-group-head {
+  display: flex; align-items: center; gap: 10px;
+  margin: 26px 0 6px; font-size: 15px; font-weight: 700;
+}
+.sev-group-note { color: var(--ink-2); font-size: 13.5px; margin: 0 0 12px; font-weight: 400; }
+
+/* ---------------------------------------------------------------- status */
+
+.steps { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0; }
+.step { display: flex; align-items: center; gap: 11px; font-size: 14.5px; color: var(--muted); }
+.step .dot {
+  width: 22px; height: 22px; border-radius: 50%; flex: none;
+  border: 2px solid #dbe3ec; background: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: var(--muted);
+}
+.step.active { color: var(--ink); font-weight: 600; }
+.step.active .dot { border-color: var(--brand); color: var(--brand-deep); }
+.step.done { color: var(--ink-2); }
+.step.done .dot { background: var(--brand); border-color: var(--brand); color: #fff; }
+
+.spinner {
+  width: 15px; height: 15px; border: 2.5px solid #d6e6f7;
+  border-top-color: var(--brand); border-radius: 50%;
+  display: inline-block; animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
+
+pre.log {
+  background: #10161d; color: #d5dde6;
+  padding: 14px; border-radius: 8px;
+  font-size: 12px; line-height: 1.5;
+  max-height: 300px; overflow: auto; white-space: pre-wrap;
+  font-family: ui-monospace, "Courier New", monospace;
+}
+
+.empty { color: var(--ink-2); font-size: 14px; padding: 6px 0; }
+
+/* ---------------------------------------------------------------- report */
+
+.report-head {
+  border-bottom: 3px solid var(--brand);
+  padding-bottom: 18px; margin-bottom: 24px;
+}
+.report-head .meta { color: var(--ink-2); font-size: 13.5px; margin-top: 6px; }
+.verdict {
+  border-radius: var(--radius); padding: 18px 20px; margin-bottom: 20px;
+  background: var(--surface); border: 1px solid var(--rule); border-left: 5px solid var(--brand);
+  font-size: 15px;
+}
+.verdict strong { font-size: 16px; }
+
+/* Login */
+.login-wrap { max-width: 380px; margin: 9vh auto 0; }
+.login-card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 30px; }
+.login-mark { text-align: center; margin-bottom: 18px; }
+
+/* Operator-facing chrome follows the OS theme; the client report is
+   intentionally light in every mode, because it is a document that must look
+   identical on screen and on paper. */
+@media (prefers-color-scheme: dark) {
+  body.app {
+    --page: #10151b; --surface: #171d25; --ink: #f2f5f8; --ink-2: #b9c2cd;
+    --rule: #28313c; --brand-deep: #7cc0f7;
+  }
+  body.app textarea, body.app input, body.app select {
+    background: #10151b; color: #f2f5f8; border-color: #33404e;
+  }
+  body.app .badge, body.app .asset { background: #1e2732; }
+  body.app .error { background: #2a1618; color: #ffb4b4; }
+  body.app .chart-track { background: #232d39; }
+  body.app .remediation { background: #142230; }
+  body.app .tile, body.app .card, body.app .finding { background: var(--surface); }
+}
+
+@media print {
+  body { background: #fff; font-size: 11.5pt; }
+  .topbar nav, .no-print { display: none !important; }
+  .card, .finding, .tile { border-color: #ccc; break-inside: avoid; }
+  .wrap { max-width: none; padding: 0; }
+  a { color: #000; text-decoration: none; }
+}

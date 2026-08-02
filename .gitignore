@@ -1,0 +1,22 @@
+# Scan results — client data, never commit
+output/
+*.jsonl
+*.xml
+*.nmap
+*.gnmap
+
+# Real client target lists — only the example is tracked
+targets/*
+!targets/targets.example.txt
+
+.env
+
+# Branding assets are per-deployment
+branding/*
+!branding/README.txt
+
+# Local preview artifacts
+report-preview.html
+
+# Generated TLS material is per-appliance and must never be committed
+certs/

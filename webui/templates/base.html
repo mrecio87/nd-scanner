@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}{{ brand_name }}{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="{% block bodyclass %}app{% endblock %}">
+
+{% block topbar %}
+<header class="topbar">
+  <div class="wrap">
+    {% include "_mark.html" %}
+    <div class="brand-text">
+      <span class="brand-name">{{ brand_name }}</span>
+      <span class="brand-sub">{{ brand_tagline }}</span>
+    </div>
+    <nav class="no-print">
+      <a href="{{ url_for('index') }}">Scans</a>
+      <a href="{{ url_for('logout') }}">Sign out</a>
+    </nav>
+  </div>
+</header>
+{% endblock %}
+
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+
+</body>
+</html>

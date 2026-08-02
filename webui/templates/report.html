@@ -1,0 +1,145 @@
+{% extends "base.html" %}
+{% block title %}Assessment report — {{ r.client or r.run_id }}{% endblock %}
+{% block bodyclass %}report{% endblock %}
+
+{% set mx = (r.counts.values()|list|max) or 1 %}
+
+{% block content %}
+
+<div class="report-head">
+  <h1 style="margin-top:18px">Network Security Assessment</h1>
+  <div class="meta">
+    {% if r.client %}Prepared for <strong>{{ r.client }}</strong> · {% endif %}
+    Scan of {{ r.started[:10] }} · Reference {{ r.run_id }}
+  </div>
+</div>
+
+<div class="no-print" style="margin-bottom:18px">
+  <button class="btn btn-secondary" onclick="window.print()">Print / Save as PDF</button>
+</div>
+
+{# ------------------------------------------------------- executive verdict #}
+<div class="verdict">
+  {% if r.highest == "critical" %}
+    <strong>Immediate action required.</strong>
+    The assessment identified critical weaknesses that an attacker could use to take
+    control of affected systems. These should be addressed before anything else.
+  {% elif r.highest == "high" %}
+    <strong>Action required.</strong>
+    The assessment identified serious weaknesses that a motivated attacker could
+    exploit. We recommend remediation within the next few days.
+  {% elif r.highest == "medium" %}
+    <strong>Improvements recommended.</strong>
+    No critical exposure was found. The issues identified are worth correcting in
+    your normal maintenance cycle.
+  {% elif r.highest == "low" %}
+    <strong>Good overall posture.</strong>
+    No significant exposure was found. Only minor hardening opportunities remain.
+  {% else %}
+    <strong>No security weaknesses identified.</strong>
+    The checks performed did not find exploitable issues on the systems in scope.
+    The inventory below records what is running and reachable.
+  {% endif %}
+</div>
+
+{# ----------------------------------------------------------------- tiles #}
+<div class="tiles">
+  <div class="tile"><div class="n">{{ r.hosts|length }}</div><div class="k">Systems found</div></div>
+  <div class="tile"><div class="n">{{ r.total_services }}</div><div class="k">Open services</div></div>
+  <div class="tile"><div class="n">{{ r.actionable }}</div><div class="k">Issues to address</div></div>
+  <div class="tile">
+    <div class="n">{% if r.highest %}{{ sev_label[r.highest] }}{% else %}None{% endif %}</div>
+    <div class="k">Highest severity</div>
+  </div>
+</div>
+
+{# ----------------------------------------------------------------- chart #}
+<h2>Findings by severity</h2>
+<div class="card">
+  <div class="chart">
+    {% for s in sev_order %}
+    <div class="chart-row">
+      <div class="chart-label"><span class="sev-dot s-{{ s }}"></span>{{ sev_label[s] }}</div>
+      <div class="chart-track">
+        <div class="chart-fill s-{{ s }}"
+             style="width: {{ (r.counts[s] / mx * 100) if r.counts[s] else 0 }}%"></div>
+      </div>
+      <div class="chart-val">{{ r.counts[s] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{# -------------------------------------------------------------- findings #}
+{% if r.findings %}
+<h2>What we found</h2>
+{% for s in sev_order %}
+  {% set group = r.findings | selectattr("severity", "equalto", s) | list %}
+  {% if group %}
+    <div class="sev-group-head">
+      <span class="badge"><span class="sev-dot s-{{ s }}"></span>{{ sev_label[s] }}</span>
+      <span>{{ group|length }} finding{{ "s" if group|length != 1 }}</span>
+    </div>
+    <p class="sev-group-note">{{ sev_meaning[s] }}</p>
+
+    {% for f in group %}
+    <div class="finding">
+      <div class="finding-head">
+        <div class="finding-title">{{ f.name }}</div>
+        <span class="badge"><span class="sev-dot s-{{ s }}"></span>{{ sev_label[s] }}</span>
+      </div>
+      {% if f.description %}<p>{{ f.description }}</p>{% endif %}
+      {% if f.remediation %}
+      <div class="remediation"><strong>How to fix:</strong> {{ f.remediation }}</div>
+      {% endif %}
+      <div class="assets">
+        {% for a in f.assets[:12] %}<span class="asset">{{ a }}</span>{% endfor %}
+        {% if f.assets|length > 12 %}
+          <span class="asset">+{{ f.assets|length - 12 }} more</span>
+        {% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+{% endif %}
+
+{# ------------------------------------------------------------- inventory #}
+<h2>Systems and services discovered</h2>
+<div class="card">
+  {% if r.hosts %}
+  <table>
+    <tr><th>System</th><th>Port</th><th>Service</th><th>Software detected</th></tr>
+    {% for ip, ports in r.hosts.items() %}
+      {% for p in ports %}
+      <tr>
+        <td class="mono">{% if loop.first %}{{ ip }}{% endif %}</td>
+        <td class="mono">{{ p.port }}</td>
+        <td>{{ p.service or "—" }}</td>
+        <td>{{ p.product or "—" }}</td>
+      </tr>
+      {% endfor %}
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No reachable systems were found in the scanned range.</p>
+  {% endif %}
+</div>
+
+{# ----------------------------------------------------------------- scope #}
+<h2>Scope</h2>
+<div class="card">
+  <p class="hint" style="margin-bottom:10px">The following ranges were assessed:</p>
+  <div class="assets">
+    {% for t in r.scope %}<span class="asset">{{ t }}</span>{% endfor %}
+  </div>
+  <p class="hint" style="margin-top:14px; margin-bottom:0">
+    Testing was unauthenticated and performed from outside the assessed systems.
+    Findings reflect the state of the network at the time of the scan.
+  </p>
+</div>
+
+<p class="hint" style="margin:26px 0 40px">
+  {{ brand_name }} · Reference {{ r.run_id }}
+</p>
+{% endblock %}

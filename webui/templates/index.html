@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}New scan — {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1>Start a scan</h1>
+<p class="lede">Enter the networks you are authorised to assess. One address or range per line.</p>
+
+{% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+<div class="card">
+  <form method="post" action="{{ url_for('scan') }}">
+    <div class="field">
+      <label for="targets">Target networks</label>
+      <div class="hint">Hostnames, single IPs, or CIDR ranges — e.g. <span class="mono">192.168.1.0/24</span></div>
+      <textarea id="targets" name="targets" autofocus
+                placeholder="192.168.1.0/24&#10;10.0.0.5&#10;server.client.local"></textarea>
+    </div>
+
+    <div class="row">
+      <div class="field">
+        <label for="client">Client name <span class="hint" style="display:inline">(appears on the report)</span></label>
+        <input type="text" id="client" name="client" placeholder="Acme Manufacturing">
+      </div>
+      <div class="field">
+        <label for="profile">Scan profile</label>
+        <select id="profile" name="profile">
+          <option value="standard">Standard — top 1000 ports, full checks</option>
+          <option value="quick">Quick look — top 100 ports, no vulnerability checks</option>
+          <option value="gentle">Gentle — slow rate for fragile or production networks</option>
+          <option value="thorough">Thorough — all 65535 ports (slow)</option>
+        </select>
+      </div>
+    </div>
+
+    <button class="btn" type="submit">Start scan</button>
+  </form>
+</div>
+
+<h2>Previous scans</h2>
+<div class="card">
+  {% if scans %}
+  <table>
+    <tr><th>Started</th><th>Client</th><th>Status</th><th>Findings</th><th></th></tr>
+    {% for s in scans %}
+    <tr>
+      <td class="mono">{{ s.started[:16].replace("T", " ") or s.run_id }}</td>
+      <td>{{ s.client or "—" }}</td>
+      <td>
+        {% if s.state == "running" %}<span class="spinner"></span> Running
+        {% elif s.state == "failed" %}Failed
+        {% elif s.state == "interrupted" %}Interrupted
+        {% else %}Complete{% endif %}
+      </td>
+      <td>{{ s.findings }}</td>
+      <td>
+        {% if s.state == "running" %}
+          <a href="{{ url_for('scan_view', run_id=s.run_id) }}">Watch</a>
+        {% else %}
+          <a href="{{ url_for('report', run_id=s.run_id) }}">View report</a>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+  {% else %}
+  <p class="empty">No scans yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

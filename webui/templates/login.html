@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Sign in — {{ brand_name }}{% endblock %}
+{% block topbar %}{% endblock %}
+
+{% block content %}
+<div class="login-wrap">
+  <div class="login-card">
+    <div class="login-mark">
+      {% include "_mark.html" %}
+      <div class="brand-name">{{ brand_name }}</div>
+      <div class="brand-sub">{{ brand_tagline }}</div>
+    </div>
+
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+
+    <form method="post">
+      <div class="field">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autofocus autocomplete="current-password">
+      </div>
+      <button class="btn" type="submit" style="width:100%">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,98 @@
+services:
+  netscan:
+    build:
+      context: .
+    image: netscan-appliance:latest
+    container_name: netscan
+
+    # naabu SYN scan needs raw sockets. Drop these and set SCAN_TYPE=c for an
+    # unprivileged TCP connect scan (slower, noisier in target logs).
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    volumes:
+      - ./targets:/targets:ro
+      - ./output:/output
+
+    environment:
+      TARGET: "${TARGET:-}"
+      # Set in .env so scan results are owned by you, not root.
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
+      SCAN_TYPE: "${SCAN_TYPE:-s}"
+      NAABU_TOP_PORTS: "${NAABU_TOP_PORTS:-1000}"
+      NAABU_PORTS: "${NAABU_PORTS:-}"
+      NAABU_RATE: "${NAABU_RATE:-1000}"
+      NAABU_CONCURRENCY: "${NAABU_CONCURRENCY:-25}"
+      NMAP_ARGS: "${NMAP_ARGS:--sV -Pn -T3}"
+      NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-low,medium,high,critical}"
+      NUCLEI_RATE: "${NUCLEI_RATE:-150}"
+      NUCLEI_CONCURRENCY: "${NUCLEI_CONCURRENCY:-25}"
+      NUCLEI_TAGS: "${NUCLEI_TAGS:-}"
+      NUCLEI_UPDATE: "${NUCLEI_UPDATE:-false}"
+      SKIP_NMAP: "${SKIP_NMAP:-false}"
+      SKIP_NUCLEI: "${SKIP_NUCLEI:-false}"
+      TARGETS_FILE: "${TARGETS_FILE:-/targets/targets.txt}"
+
+    # Resource ceiling — the whole point of this build vs the OpenVAS one.
+    # Raise for beefier appliances, lower for a Pi-class box.
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+    network_mode: bridge
+    restart: "no"
+
+  # Web UI: launch scans, watch progress, present findings to a client.
+  #   docker compose up -d web   ->   http://<appliance-ip>:8080
+  web:
+    build:
+      context: .
+    image: netscan-appliance:latest
+    container_name: netscan-web
+    entrypoint: ["python3", "/opt/webui/app.py"]
+
+    cap_add:
+      - NET_RAW
+      - NET_ADMIN
+
+    ports:
+      - "${WEBUI_PORT:-8080}:8080"
+
+    volumes:
+      - ./output:/output
+      - ./branding:/branding:ro
+      # Persisted so the certificate fingerprint stays stable and can be
+      # trusted once, rather than re-accepted on every restart.
+      - ./certs:/certs
+
+    environment:
+      HTTPS: "${HTTPS:-true}"
+      # Add the appliance's LAN address so the cert matches the URL you use,
+      # e.g. TLS_SAN=192.168.1.50  (comma-separated; IPs or hostnames)
+      TLS_SAN: "${TLS_SAN:-}"
+      TLS_CERT: "${TLS_CERT:-}"
+      TLS_KEY: "${TLS_KEY:-}"
+      # Leave WEBUI_PASSWORD unset and one is generated per start and printed
+      # to `docker compose logs web` — the UI is never left unauthenticated.
+      WEBUI_PASSWORD: "${WEBUI_PASSWORD:-}"
+      # Fleet password, verified against the hash in fleet.hash. The plaintext
+      # is never stored anywhere in the repo.
+      WEBUI_PASSWORD_HASH: "${WEBUI_PASSWORD_HASH:-}"
+      WEBUI_SECRET: "${WEBUI_SECRET:-}"
+      BRAND_NAME: "${BRAND_NAME:-Network Defenders}"
+      BRAND_TAGLINE: "${BRAND_TAGLINE:-Network Security Assessment}"
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
+      SCAN_TYPE: "${SCAN_TYPE:-s}"
+
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+    restart: unless-stopped

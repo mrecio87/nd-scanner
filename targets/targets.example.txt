@@ -1,0 +1,6 @@
+# One target per line. Blank lines and # comments are ignored.
+# Accepts hostnames, IPs, and CIDR ranges.
+#
+# scanme.nmap.org
+# 192.168.1.0/24
+# 10.0.0.5

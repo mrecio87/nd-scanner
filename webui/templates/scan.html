@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}Scan in progress — {{ brand_name }}{% endblock %}
+
+{% block content %}
+<h1>Scan in progress</h1>
+<p class="lede" id="sub">Started {{ status.started[:16].replace("T", " ") }} · {{ status.targets }} target(s)</p>
+
+<div class="card">
+  <div class="steps" id="steps">
+    <div class="step" data-stage="1"><span class="dot">1</span> Discovering open ports</div>
+    <div class="step" data-stage="2"><span class="dot">2</span> Identifying services</div>
+    <div class="step" data-stage="3"><span class="dot">3</span> Checking for vulnerabilities</div>
+  </div>
+  <div id="actions" style="margin-top:20px; display:none">
+    <a class="btn" id="report-link" href="{{ url_for('report', run_id=run_id) }}">View report</a>
+  </div>
+  <div id="failed" style="margin-top:20px; display:none">
+    <div class="error" id="failed-msg">The scan did not finish cleanly. The log below shows what happened.</div>
+    <a class="btn btn-secondary" href="{{ url_for('index') }}">Start a new scan</a>
+  </div>
+</div>
+
+<h2 class="no-print">Activity</h2>
+<pre class="log" id="log">Waiting for output…</pre>
+
+<script>
+(function () {
+  var done = false;
+  function poll() {
+    fetch({{ url_for('api_scan', run_id=run_id)|tojson }})
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var steps = document.querySelectorAll('#steps .step');
+        steps.forEach(function (el) {
+          var n = parseInt(el.dataset.stage, 10);
+          el.classList.toggle('done', d.stage > n || d.state === 'done');
+          el.classList.toggle('active', d.stage === n && d.state === 'running');
+        });
+        document.getElementById('log').textContent = d.log || 'Waiting for output…';
+
+        if (d.state !== 'running' && !done) {
+          done = true;
+          var bad = (d.state === 'failed' || d.state === 'interrupted');
+          document.getElementById('sub').textContent =
+            d.state === 'interrupted' ? 'Scan interrupted.' :
+            d.state === 'failed'      ? 'Scan failed.' : 'Scan complete.';
+          if (d.state === 'interrupted') {
+            document.getElementById('failed-msg').textContent =
+              'The appliance restarted while this scan was running, so it did ' +
+              'not finish. Partial results are kept, but re-run the scan for a ' +
+              'complete picture.';
+          }
+          document.getElementById(bad ? 'failed' : 'actions').style.display = 'block';
+          return;
+        }
+        if (!done) setTimeout(poll, 2500);
+      })
+      .catch(function () { if (!done) setTimeout(poll, 5000); });
+  }
+  poll();
+})();
+</script>
+{% endblock %}
