@@ -26,7 +26,7 @@ services:
       NAABU_RATE: "${NAABU_RATE:-1000}"
       NAABU_CONCURRENCY: "${NAABU_CONCURRENCY:-25}"
       NMAP_ARGS: "${NMAP_ARGS:--sV -Pn -T3}"
-      NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-low,medium,high,critical}"
+      NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
       NUCLEI_RATE: "${NUCLEI_RATE:-150}"
       NUCLEI_CONCURRENCY: "${NUCLEI_CONCURRENCY:-25}"
       NUCLEI_TAGS: "${NUCLEI_TAGS:-}"
@@ -84,7 +84,19 @@ services:
       BRAND_TAGLINE: "${BRAND_TAGLINE:-Network Security Assessment}"
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
+      # Scan knobs, so a setting in .env reaches UI-launched scans and not only
+      # the CLI service. Profile choices in the UI override these per run.
       SCAN_TYPE: "${SCAN_TYPE:-s}"
+      NAABU_TOP_PORTS: "${NAABU_TOP_PORTS:-1000}"
+      NAABU_PORTS: "${NAABU_PORTS:-}"
+      NAABU_RATE: "${NAABU_RATE:-1000}"
+      NAABU_CONCURRENCY: "${NAABU_CONCURRENCY:-25}"
+      NMAP_ARGS: "${NMAP_ARGS:--sV -Pn -T3}"
+      NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
+      NUCLEI_TAGS: "${NUCLEI_TAGS:-}"
+      NUCLEI_RATE: "${NUCLEI_RATE:-150}"
+      NUCLEI_CONCURRENCY: "${NUCLEI_CONCURRENCY:-25}"
+      NUCLEI_UPDATE: "${NUCLEI_UPDATE:-false}"
 
     deploy:
       resources:

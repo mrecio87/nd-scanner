@@ -238,6 +238,31 @@ tr:last-child td { border-bottom: none; }
 @keyframes spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 
+.log-panel {
+  margin-top: 22px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+.log-panel > summary {
+  cursor: pointer;
+  padding: 12px 16px;
+  font-size: 14px;
+  font-weight: 600;
+  list-style: none;
+  user-select: none;
+}
+.log-panel > summary::-webkit-details-marker { display: none; }
+.log-panel > summary::before {
+  content: "\25B8";           /* right-pointing triangle, rotates when open */
+  display: inline-block;
+  margin-right: 9px;
+  color: var(--muted);
+  transition: transform 0.15s;
+}
+.log-panel[open] > summary::before { transform: rotate(90deg); }
+.log-panel > pre.log { margin: 0 12px 12px; }
+
 pre.log {
   background: #10161d; color: #d5dde6;
   padding: 14px; border-radius: 8px;

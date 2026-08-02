@@ -109,7 +109,7 @@ Environment variables in `.env`. The defaults are conservative on purpose.
 | `NAABU_PORTS` | | Explicit list, e.g. `80,443,8080-8090`, or `-` for all 65535 |
 | `NAABU_RATE` | `1000` | Packets/sec. Drop to around 200 on fragile networks |
 | `NMAP_ARGS` | `-sV -Pn -T3` | Add `-sC` for default scripts, `-T2` to go quieter |
-| `NUCLEI_SEVERITY` | `low,medium,high,critical` | Add `info` for inventory-level detail |
+| `NUCLEI_SEVERITY` | `info,low,medium,high,critical` | Drop `info` for findings only |
 | `NUCLEI_TAGS` | | e.g. `cve,exposure` to narrow the template set |
 | `NUCLEI_RATE` | `150` | Requests/sec |
 | `NUCLEI_UPDATE` | `false` | `true` refreshes templates before scanning |

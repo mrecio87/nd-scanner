@@ -217,6 +217,63 @@ def stage_from_log(run_dir):
     return 0, "Starting"
 
 
+def scan_progress(run_dir):
+    """Live counts for the progress page.
+
+    Read from the artefacts the tools are writing rather than by scraping the
+    log, so the numbers match what ends up in the report.
+    """
+    hosts, ports = set(), 0
+    naabu = run_dir / "naabu.json"
+    if naabu.exists():
+        for line in naabu.read_text(errors="replace").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                d = json.loads(line)
+            except ValueError:
+                continue
+            ip = d.get("ip") or d.get("host")
+            if ip:
+                hosts.add(ip)
+            ports += 1
+
+    nmap_dir = run_dir / "nmap"
+    services = len(list(nmap_dir.glob("*.xml"))) if nmap_dir.is_dir() else 0
+
+    findings = 0
+    nj = run_dir / "nuclei.jsonl"
+    if nj.exists():
+        findings = sum(1 for l in nj.read_text(errors="replace").splitlines() if l.strip())
+
+    # nuclei prints a stats object periodically; the last one is current.
+    checks_done = checks_total = errors = 0
+    log = run_dir / "scan.log"
+    if log.exists():
+        for m in re.finditer(r'\{"duration":.*?\}', log.read_text(errors="replace")):
+            try:
+                st = json.loads(m.group(0))
+            except ValueError:
+                continue
+            checks_done = int(st.get("requests", 0) or 0)
+            errors = int(st.get("errors", 0) or 0)
+            checks_total = checks_done + errors
+
+    # A scan being blocked at the network looks identical to a clean result
+    # unless the failure rate is surfaced while it runs.
+    unreachable = round(100 * errors / checks_total) if checks_total else 0
+
+    return {
+        "hosts": len(hosts),
+        "ports": ports,
+        "services": services,
+        "findings": findings,
+        "unreachable": unreachable,
+        "degraded": unreachable >= 20,
+    }
+
+
 def log_tail(run_dir, n=200):
     log = run_dir / "scan.log"
     if not log.exists():
@@ -522,9 +579,12 @@ def api_scan(run_id):
     run_dir = run_dir_for(run_id)
     status = read_status(run_dir)
     stage, label = stage_from_log(run_dir)
-    return jsonify({"state": status.get("state", "done"), "stage": stage,
-                    "label": label, "log": log_tail(run_dir),
-                    "exit_code": status.get("exit_code")})
+    payload = {"state": status.get("state", "done"), "stage": stage,
+               "label": label, "log": log_tail(run_dir),
+               "started": status.get("started", ""),
+               "exit_code": status.get("exit_code")}
+    payload.update(scan_progress(run_dir))
+    return jsonify(payload)
 
 
 @app.route("/report/<run_id>")
