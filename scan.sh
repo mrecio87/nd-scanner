@@ -75,7 +75,7 @@ naabu "${naabu_args[@]}" || naabu_rc=$?
 
 # A failed discovery must never be reported as a clean scan.
 if [ "$naabu_rc" -ne 0 ] && [ ! -s "$NAABU_JSON" ]; then
-    die "naabu failed (exit $naabu_rc) and produced no results. Check NAABU_* settings — NAABU_TOP_PORTS accepts only 100, 1000, or full; use NAABU_PORTS for an arbitrary list."
+    die "naabu failed (exit $naabu_rc) and produced no results. Check NAABU_* settings. NAABU_TOP_PORTS accepts only 100, 1000, or full; use NAABU_PORTS for an arbitrary list."
 fi
 [ "$naabu_rc" -eq 0 ] || log "naabu exited $naabu_rc but wrote partial results; continuing"
 
@@ -144,7 +144,7 @@ fi
 
 SUMMARY="$RUN_DIR/summary.txt"
 {
-    printf 'netscan-appliance run %s\n' "$RUN_ID"
+    printf 'nd-scanner run %s\n' "$RUN_ID"
     printf 'targets:      %s\n' "$(count "$RESOLVED_TARGETS")"
     printf 'hosts up:     %s\n' "$(count "$HOSTPORTS")"
     printf 'open ports:   %s\n' "$(count "$NAABU_JSON")"

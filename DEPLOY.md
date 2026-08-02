@@ -1,19 +1,19 @@
 # Deploying a new appliance, start to finish
 
 Split into two phases. **Do everything in Phase 1 at your office**, on your own
-network — it needs internet, and it needs GitHub credentials you should not be
+network. It needs internet, and it needs GitHub credentials you should not be
 typing on a client site. Phase 2 is what you do on the client's premises.
 
 ---
 
-## Phase 1 — Build the appliance (at the office)
+## Phase 1: Build the appliance (at the office)
 
 ### 1. Install Debian
 
 Debian 12 (bookworm) or newer. Two choices during the installer that are hard to
 change afterwards:
 
-- **Enable full-disk encryption.** Choose *Guided — use entire disk and set up
+- **Enable full-disk encryption.** Choose *Guided, use entire disk and set up
   encrypted LVM*. These boxes travel and can be stolen; disk encryption is the
   control that keeps a lost appliance from handing over its password, the
   TLS key, and any client findings still on disk. You cannot retrofit this
@@ -46,7 +46,7 @@ session, and `setup.sh` will complain if you skip this.
 ### 4. Clone the repository
 
 ```bash
-git clone https://github.com/mrecio87/nd-scanner.git netscan-appliance && cd netscan-appliance
+git clone https://github.com/mrecio87/nd-scanner.git nd-scanner && cd nd-scanner
 ```
 
 The public repository needs no authentication. Cloning the **private** one asks
@@ -54,7 +54,7 @@ for credentials: username `mrecio87`, and the password field wants a **personal
 access token**, not your account password.
 
 If you do clone the private repository from an appliance, use a **fine-grained
-token scoped to read-only Contents on that repository only** — not a classic token
+token scoped to read-only Contents on that repository only**, not a classic token
 with full `repo` scope. And do not run `git config credential.helper store` on an
 appliance: it writes the token in plaintext to `~/.git-credentials`, so a stolen
 box hands over your GitHub access along with everything else.
@@ -83,14 +83,14 @@ An appliance that has never been logged into is not a tested appliance.
 
 ### 7. Optional: trust the certificate
 
-Worth doing only if someone other than you will be looking at the screen — it
+Worth doing only if someone other than you will be looking at the screen. It
 removes the browser warning and adds no security. Copy `certs/appliance.crt` to
 the machine you browse from and import it into its trusted-root store. Never copy
 `appliance.key`.
 
 ---
 
-## Phase 2 — On the client site
+## Phase 2: On the client site
 
 ### 1. Place and power the box
 
@@ -111,7 +111,7 @@ reservation avoids the issue entirely.
 ### 3. Scan
 
 Open `https://<appliance-ip>:8080`, sign in, enter the authorised ranges, and run
-a **Quick look** first — it takes a couple of minutes and tells you whether you can
+a **Quick look** first. It takes a couple of minutes and tells you whether you can
 actually reach the targets. Then run the real scan.
 
 ### 4. Deliver
@@ -134,7 +134,7 @@ not rely on that as your only control.
 
 ## If the client site has no internet
 
-Phase 1 already handled it — the image is built and the templates are baked in, so
+Phase 1 already handled it. The image is built and the templates are baked in, so
 the appliance scans fine with no egress. Nothing in Phase 2 needs internet.
 
 The only thing you lose is `NUCLEI_UPDATE=true` for fresh templates. Rebuild at the
@@ -145,7 +145,7 @@ office periodically instead.
 Do Phase 1 once, then clone the disk. Each imaged box needs only:
 
 ```bash
-cd netscan-appliance && ./setup.sh
+cd nd-scanner && ./setup.sh
 ```
 
 to pick up its own address and certificate. That also avoids putting GitHub

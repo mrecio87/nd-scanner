@@ -1,11 +1,11 @@
-# Scan results — client data, never commit
+# Scan results: client data, never commit
 output/
 *.jsonl
 *.xml
 *.nmap
 *.gnmap
 
-# Real client target lists — only the example is tracked
+# Real client target lists: only the example is tracked
 targets/*
 !targets/targets.example.txt
 

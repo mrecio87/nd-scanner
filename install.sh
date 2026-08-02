@@ -7,7 +7,7 @@
 # Installs git and Docker if missing, clones the repository, and runs setup.sh.
 #
 # Environment overrides:
-#   NETSCAN_DIR         where to install          (default: $HOME/netscan-appliance)
+#   NETSCAN_DIR         where to install          (default: $HOME/nd-scanner)
 #   NETSCAN_REPO        repository URL
 #   NETSCAN_BRANCH      branch to check out       (default: main)
 #   NETSCAN_PASSWORD    set the web UI password non-interactively; otherwise
@@ -19,7 +19,7 @@ set -euo pipefail
 # truncated mid-flight, bash reaches EOF without ever calling main, rather than
 # executing half a script.
 main() {
-    NETSCAN_DIR="${NETSCAN_DIR:-$HOME/netscan-appliance}"
+    NETSCAN_DIR="${NETSCAN_DIR:-$HOME/nd-scanner}"
     NETSCAN_REPO="${NETSCAN_REPO:-https://github.com/mrecio87/nd-scanner.git}"
     NETSCAN_BRANCH="${NETSCAN_BRANCH:-main}"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Web UI for the netscan appliance: launch scans, watch progress, present findings.
 
-Deliberately small — the appliance's whole reason for existing is a low resource
+Kept small: the appliance's whole reason for existing is a low resource
 footprint, so this is Flask + the standard library and nothing else.
 """
 import json
@@ -98,7 +98,7 @@ def _host_ips():
 
 
 def build_san():
-    parts = ["DNS:localhost", "DNS:netscan-appliance", "IP:127.0.0.1"]
+    parts = ["DNS:localhost", "DNS:nd-scanner", "IP:127.0.0.1"]
     for ip in _host_ips():
         parts.append("IP:" + ip)
     for raw in TLS_SAN.split(","):
@@ -122,7 +122,7 @@ def build_san():
 def ensure_cert():
     """Persist one self-signed cert so its fingerprint is stable and trustable.
 
-    A cert regenerated on every boot can't be trusted once — it would have to be
+    A cert regenerated on every boot can't be trusted once. It would have to be
     re-accepted each start, which trains you to click through warnings.
     """
     if TLS_CERT and TLS_KEY:
@@ -140,7 +140,7 @@ def ensure_cert():
     subprocess.run(
         ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes",
          "-keyout", str(key), "-out", str(crt), "-days", "3650",
-         "-subj", "/CN=netscan-appliance", "-addext", "subjectAltName=" + san],
+         "-subj", "/CN=nd-scanner", "-addext", "subjectAltName=" + san],
         check=True, capture_output=True)
     sanfile.write_text(san)
     os.chmod(key, 0o600)
@@ -365,7 +365,7 @@ def build_report(run_id):
 
     actionable = sum(counts[s] for s in ("critical", "high", "medium", "low"))
     highest = next((s for s in SEVERITY_ORDER if counts[s]), None)
-    # 'info' findings are inventory, not risk — they must not drive the headline.
+    # 'info' findings are inventory, not risk, so they must not drive the headline.
     if highest == "info":
         highest = None
 

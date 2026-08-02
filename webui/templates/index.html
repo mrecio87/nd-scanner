@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}New scan — {{ brand_name }}{% endblock %}
+{% block title %}New scan | {{ brand_name }}{% endblock %}
 
 {% block content %}
 <h1>Start a scan</h1>
@@ -11,7 +11,7 @@
   <form method="post" action="{{ url_for('scan') }}">
     <div class="field">
       <label for="targets">Target networks</label>
-      <div class="hint">Hostnames, single IPs, or CIDR ranges — e.g. <span class="mono">192.168.1.0/24</span></div>
+      <div class="hint">Hostnames, single IPs, or CIDR ranges, e.g. <span class="mono">192.168.1.0/24</span></div>
       <textarea id="targets" name="targets" autofocus
                 placeholder="192.168.1.0/24&#10;10.0.0.5&#10;server.client.local"></textarea>
     </div>
@@ -24,10 +24,10 @@
       <div class="field">
         <label for="profile">Scan profile</label>
         <select id="profile" name="profile">
-          <option value="standard">Standard — top 1000 ports, full checks</option>
-          <option value="quick">Quick look — top 100 ports, no vulnerability checks</option>
-          <option value="gentle">Gentle — slow rate for fragile or production networks</option>
-          <option value="thorough">Thorough — all 65535 ports (slow)</option>
+          <option value="standard">Standard: top 1000 ports, full checks</option>
+          <option value="quick">Quick look: top 100 ports, no vulnerability checks</option>
+          <option value="gentle">Gentle: slow rate for fragile or production networks</option>
+          <option value="thorough">Thorough: all 65535 ports (slow)</option>
         </select>
       </div>
     </div>
@@ -44,7 +44,7 @@
     {% for s in scans %}
     <tr>
       <td class="mono">{{ s.started[:16].replace("T", " ") or s.run_id }}</td>
-      <td>{{ s.client or "—" }}</td>
+      <td>{{ s.client or "-" }}</td>
       <td>
         {% if s.state == "running" %}<span class="spinner"></span> Running
         {% elif s.state == "failed" %}Failed

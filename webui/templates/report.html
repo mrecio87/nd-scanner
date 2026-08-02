@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Assessment report — {{ r.client or r.run_id }}{% endblock %}
+{% block title %}Assessment report | {{ r.client or r.run_id }}{% endblock %}
 {% block bodyclass %}report{% endblock %}
 
 {% set mx = (r.counts.values()|list|max) or 1 %}
@@ -115,8 +115,8 @@
       <tr>
         <td class="mono">{% if loop.first %}{{ ip }}{% endif %}</td>
         <td class="mono">{{ p.port }}</td>
-        <td>{{ p.service or "—" }}</td>
-        <td>{{ p.product or "—" }}</td>
+        <td>{{ p.service or "-" }}</td>
+        <td>{{ p.product or "-" }}</td>
       </tr>
       {% endfor %}
     {% endfor %}

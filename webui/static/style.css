@@ -1,6 +1,6 @@
 /* Network Defenders appliance UI.
    Brand values taken from networkdefenders.com: accent #2ea3f2, CTA #ffa727,
-   Open Sans. #2ea3f2 is only 2.75:1 on white, so it is never used for text —
+   Open Sans. #2ea3f2 is only 2.75:1 on white, so it is never used for text;
    text uses the darker step of the same hue (#12609c, 6.61:1). */
 
 :root {
