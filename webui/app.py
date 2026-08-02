@@ -307,7 +307,14 @@ def count_vanished_ports(run_dir):
     if not nmap_dir.is_dir():
         return 0, 0
 
+    # nmap -oA writes a host's XML only once it has finished every port for
+    # that host, so a host with no XML file yet has simply not been reached --
+    # it has not "vanished". Judging it before nmap gets there produced a
+    # false 100% on a single-host scan: naabu.json is written the moment
+    # naabu finishes, well before nmap's one XML file lands, so every port
+    # briefly looked unconfirmed even though nothing was wrong.
     confirmed_open = set()
+    completed_hosts = set()
     for xml_path in nmap_dir.glob("*.xml"):
         try:
             root = ET.parse(xml_path).getroot()
@@ -318,6 +325,7 @@ def count_vanished_ports(run_dir):
             if addr_el is None:
                 continue
             ip = addr_el.get("addr")
+            completed_hosts.add(ip)
             for p in host.findall(".//port"):
                 st = p.find("state")
                 if st is not None and st.get("state") == "open":
@@ -339,10 +347,11 @@ def count_vanished_ports(run_dir):
         if ip and d.get("port") is not None:
             naabu_open.add((ip, int(d["port"])))
 
-    if not naabu_open:
+    checkable = {pair for pair in naabu_open if pair[0] in completed_hosts}
+    if not checkable:
         return 0, 0
-    vanished = len(naabu_open - confirmed_open)
-    return vanished, len(naabu_open)
+    vanished = len(checkable - confirmed_open)
+    return vanished, len(checkable)
 
 
 def log_tail(run_dir, n=200):

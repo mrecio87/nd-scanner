@@ -159,10 +159,16 @@
         setText('s-findings', d.findings);
         setText('s-elapsed', elapsed(d.started));
 
+        // Reflect the current answer every poll, not just the first time it
+        // turns true: an early read can be a false positive (a host nmap has
+        // not reached yet looks the same as one that vanished) that a later
+        // poll, once nmap has caught up, correctly clears.
         if (d.degraded) {
           document.getElementById('degraded-detail').textContent =
             d.unreachable + '% of ports found open earlier in the scan stopped answering.';
           document.getElementById('degraded').style.display = 'block';
+        } else {
+          document.getElementById('degraded').style.display = 'none';
         }
 
         if (findingsPanel.open) loadFindings();
