@@ -3,7 +3,7 @@
 
 {% block content %}
 <h1>Start a scan</h1>
-<p class="lede">Enter the networks you are authorised to assess. One address or range per line.</p>
+<p class="lede">Enter the networks you are authorized to assess. One address or range per line.</p>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 {% if flash %}<div class="notice">{{ flash }}</div>{% endif %}
@@ -55,8 +55,8 @@ git pull
     </div>
 
     <label class="confirm">
-      <input type="checkbox" name="authorised" required>
-      I have written authorisation to scan these networks.
+      <input type="checkbox" name="authorized" required>
+      I have written authorization to scan these networks.
     </label>
 
     <button class="btn" type="submit">Start scan</button>

@@ -143,7 +143,7 @@ other box you have deployed.
 
 Full runbook, including the Debian install: **[DEPLOY.md](DEPLOY.md)**.
 
-Confirm written authorisation and scope before travelling, verify the certificate
+Confirm written authorization and scope before traveling, verify the certificate
 fingerprint on first connect, and clear results before the appliance leaves or is
 reused. `output/` holds that client's complete vulnerability map.
 

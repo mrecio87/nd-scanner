@@ -22,10 +22,12 @@
 {% if r.degraded %}
 <div class="error" style="margin-bottom:20px">
   <strong>This scan did not complete successfully.</strong>
-  {{ r.unreachable }}% of the checks could not reach their target, so the results
-  below are incomplete. A firewall or access control was most likely blocking the
-  scanner. Do not read the absence of findings as evidence that these systems are
-  secure. Re-run the scan once the scanner has unobstructed access.
+  {{ r.unreachable }}% of the ports found open early in the scan no longer
+  answered when checked again moments later, so the results below are
+  incomplete. A firewall or access control most likely started blocking the
+  scanner partway through. Do not read the absence of findings as evidence
+  that these systems are secure. Re-run the scan once the scanner has
+  unobstructed access throughout.
 </div>
 {% endif %}
 

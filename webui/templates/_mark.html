@@ -2,8 +2,11 @@
 <img class="mark" src="{{ url_for('branding_logo') }}" alt="{{ brand_name }}" height="38">
 {% else %}
 <svg class="mark" width="34" height="34" viewBox="0 0 32 32" role="img" aria-label="{{ brand_name }}">
-  <circle cx="10" cy="16" r="3.2" fill="#2ea3f2"/>
-  <path d="M16.5 9.5a9 9 0 0 1 0 13" stroke="#2ea3f2" stroke-width="2.6" fill="none" stroke-linecap="round"/>
-  <path d="M21 5.5a15 15 0 0 1 0 21" stroke="#2ea3f2" stroke-width="2.6" fill="none" stroke-linecap="round" opacity=".5"/>
+  <circle cx="13.5" cy="13.5" r="6.3" fill="none" stroke="#2ea3f2" stroke-width="2.4"/>
+  <line x1="18" y1="18" x2="24.5" y2="24.5" stroke="#2ea3f2" stroke-width="2.6" stroke-linecap="round"/>
+  <circle cx="11.3" cy="11.3" r="1.15" fill="#2ea3f2"/>
+  <circle cx="15.8" cy="11.3" r="1.15" fill="#2ea3f2"/>
+  <circle cx="11.3" cy="15.8" r="1.15" fill="#2ea3f2"/>
+  <circle cx="15.8" cy="15.8" r="1.15" fill="#2ea3f2"/>
 </svg>
 {% endif %}

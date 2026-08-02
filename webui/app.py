@@ -273,22 +273,15 @@ def scan_progress(run_dir):
     if nj.exists():
         findings = sum(1 for l in nj.read_text(errors="replace").splitlines() if l.strip())
 
-    # nuclei prints a stats object periodically; the last one is current.
-    checks_done = checks_total = errors = 0
-    log = run_dir / "scan.log"
-    if log.exists():
-        for m in re.finditer(r'\{"duration":.*?\}', log.read_text(errors="replace")):
-            try:
-                st = json.loads(m.group(0))
-            except ValueError:
-                continue
-            checks_done = int(st.get("requests", 0) or 0)
-            errors = int(st.get("errors", 0) or 0)
-            checks_total = checks_done + errors
-
-    # A scan being blocked at the network looks identical to a clean result
-    # unless the failure rate is surfaced while it runs.
-    unreachable = round(100 * errors / checks_total) if checks_total else 0
+    vanished, checked = count_vanished_ports(run_dir)
+    # A scan being blocked mid-run looks identical to a clean result unless
+    # something is surfaced while it runs. nuclei's own error rate does not
+    # work for this: it fires HTTP templates at every open port regardless of
+    # protocol, so a normal mix of SSH, SMB and RPC services produces a high
+    # error rate with nothing wrong. Comparing naabu against nmap does not
+    # have that problem, because both are asking the same yes/no question
+    # (is this port open) rather than "does this respond like a web server".
+    unreachable = round(100 * vanished / checked) if checked else 0
 
     return {
         "hosts": len(hosts),
@@ -296,8 +289,60 @@ def scan_progress(run_dir):
         "services": services,
         "findings": findings,
         "unreachable": unreachable,
-        "degraded": unreachable >= 20,
+        "degraded": checked >= 5 and unreachable >= 20,
     }
+
+
+def count_vanished_ports(run_dir):
+    """Ports naabu found open that nmap, moments later, did not.
+
+    naabu and nmap ask the same question of the same port within seconds of
+    each other, so unlike nuclei's HTTP probing this is not sensitive to what
+    protocol the service actually speaks. A port that goes from open to
+    filtered or closed in that window means something started dropping or
+    resetting the connection between the two passes, which is a stronger
+    signal than a raw error count.
+    """
+    nmap_dir = run_dir / "nmap"
+    if not nmap_dir.is_dir():
+        return 0, 0
+
+    confirmed_open = set()
+    for xml_path in nmap_dir.glob("*.xml"):
+        try:
+            root = ET.parse(xml_path).getroot()
+        except (ET.ParseError, OSError):
+            continue
+        for host in root.findall("host"):
+            addr_el = host.find("address")
+            if addr_el is None:
+                continue
+            ip = addr_el.get("addr")
+            for p in host.findall(".//port"):
+                st = p.find("state")
+                if st is not None and st.get("state") == "open":
+                    confirmed_open.add((ip, int(p.get("portid"))))
+
+    naabu = run_dir / "naabu.json"
+    if not naabu.exists():
+        return 0, 0
+    naabu_open = set()
+    for line in naabu.read_text(errors="replace").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        ip = d.get("ip") or d.get("host")
+        if ip and d.get("port") is not None:
+            naabu_open.add((ip, int(d["port"])))
+
+    if not naabu_open:
+        return 0, 0
+    vanished = len(naabu_open - confirmed_open)
+    return vanished, len(naabu_open)
 
 
 def log_tail(run_dir, n=200):
@@ -305,7 +350,7 @@ def log_tail(run_dir, n=200):
     if not log.exists():
         return ""
     lines = log.read_text(errors="replace").splitlines()
-    # Strip ANSI colour from the tools so the browser shows clean text.
+    # Strip ANSI color from the tools so the browser shows clean text.
     return "\n".join(re.sub(r"\x1b\[[0-9;]*m", "", ln) for ln in lines[-n:])
 
 
@@ -330,7 +375,7 @@ def start_scan(targets, opts):
                  profile=opts.get("_profile", ""))
 
     logf = open(run_dir / "scan.log", "wb")
-    # New session, so the whole tool chain can be signalled as one group:
+    # New session, so the whole tool chain can be signaled as one group:
     # killing scan.sh alone would leave naabu or nmap running.
     proc = subprocess.Popen([SCAN_SCRIPT], env=env, stdout=logf,
                             stderr=subprocess.STDOUT, cwd="/",
@@ -589,9 +634,9 @@ def index():
 @app.route("/scan", methods=["POST"])
 def scan():
     # The checkbox is required in the form, but a form can be posted directly.
-    if not request.form.get("authorised"):
+    if not request.form.get("authorized"):
         return render_template("index.html", scans=list_scans(),
-                               error="Confirm you have written authorisation before starting a scan."), 400
+                               error="Confirm you have written authorization before starting a scan."), 400
 
     targets = clean_targets(request.form.get("targets", ""))
     if not targets:
@@ -701,7 +746,7 @@ def stop_scan(run_id):
 
     if proc is not None:
         # Signal the whole process group: scan.sh's children do the actual work
-        # and outlive it if signalled individually.
+        # and outlive it if signaled individually.
         try:
             pgid = os.getpgid(proc.pid)
         except OSError:
@@ -715,7 +760,7 @@ def stop_scan(run_id):
 
             def reaper():
                 # Always escalate. scan.sh exits almost immediately once
-                # signalled, but naabu or nmap can keep running and keep
+                # signaled, but naabu or nmap can keep running and keep
                 # putting traffic on the client's network, so waiting only on
                 # the parent is not enough.
                 try:
@@ -754,6 +799,29 @@ def purge():
 def scan_view(run_id):
     run_dir = run_dir_for(run_id)
     return render_template("scan.html", run_id=run_id, status=read_status(run_dir))
+
+
+@app.route("/api/scan/<run_id>/findings")
+def scan_findings(run_id):
+    """Grouped findings for the live dropdown on the progress page.
+
+    nuclei writes nuclei.jsonl as matches happen rather than only at the end,
+    so parse_findings works the same mid-scan as it does for the finished
+    report -- this is that exact function, just exposed before the run is over.
+    """
+    run_dir = run_dir_for(run_id)
+    findings = parse_findings(run_dir)
+    LIMIT = 60
+    out = [{
+        "name": f["name"],
+        "severity": f["severity"],
+        "severity_label": SEVERITY_LABEL[f["severity"]],
+        "description": f["description"],
+        "assets": f["assets"][:6],
+        "asset_count": len(f["assets"]),
+    } for f in findings[:LIMIT]]
+    return jsonify({"total": len(findings), "findings": out,
+                    "truncated": max(0, len(findings) - LIMIT)})
 
 
 @app.route("/api/scan/<run_id>")

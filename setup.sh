@@ -178,6 +178,19 @@ else
     fi
 fi
 
+# Every address this host answers on, so scan.sh can drop the appliance from
+# its own target list. Docker publishes the web UI on 0.0.0.0, so it is
+# reachable via every interface IP, not just the one used for TLS_SAN -- a
+# scan of a whole subnet that happens to include this box otherwise finds its
+# own management port and aims nuclei's full template set at the process
+# serving the page the operator is watching.
+SELF_IPS="$(ip -4 -o addr show scope global 2>/dev/null \
+    | grep -vE ' (docker|br-|veth)' \
+    | awk '{print $4}' | cut -d/ -f1 | paste -sd, - || true)"
+sed -i '/^APPLIANCE_IPS=/d' .env
+env_add APPLIANCE_IPS "127.0.0.1${SELF_IPS:+,$SELF_IPS}"
+[ -n "$SELF_IPS" ] && say "address:   $SELF_IPS excluded from any scan this appliance runs"
+
 # --------------------------------------------------------------- build/run
 
 # Point the update check at whichever repository this checkout came from.
@@ -241,6 +254,6 @@ say "  then proceed. That check is what makes the self-signed certificate"
 say "  meaningful -- importing it only removes the warning screen."
 say ""
 say "  Scans run from this host, so it can only reach networks this host routes to."
-say "  Only scan what you have written authorisation to test."
+say "  Only scan what you have written authorization to test."
 say ""
 

@@ -17,6 +17,13 @@ HOST_SUBNETS="${HOST_SUBNETS:-}"
 NAABU_RATE_LOCAL="${NAABU_RATE_LOCAL:-2000}"
 NAABU_RATE_ROUTED="${NAABU_RATE_ROUTED:-300}"
 
+# Written by setup.sh from this host's own interface addresses. A target range
+# that happens to include the appliance finds its own management port and
+# would otherwise aim nuclei's full template set at the process serving the
+# page the operator is watching. Empty this in .env to include the appliance
+# in its own scans on purpose.
+APPLIANCE_IPS="${APPLIANCE_IPS:-127.0.0.1}"
+
 NMAP_ARGS="${NMAP_ARGS:--sV -Pn -T3}"
 
 NUCLEI_SEVERITY="${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
@@ -108,6 +115,29 @@ fi
 if [ ! -s "$NAABU_JSON" ]; then
     log "no open ports discovered; nothing to hand to nmap or nuclei"
     printf 'scan %s: no open ports found\n' "$RUN_ID" > "$RUN_DIR/summary.txt"
+    exit 0
+fi
+
+# Drop the appliance's own addresses before anything downstream is built from
+# this file, so both nmap and nuclei -- which derive their target lists from
+# it -- never see them. naabu itself already ran; a SYN probe is harmless,
+# nuclei's exploitation-style templates against our own web UI are not.
+if [ -n "$APPLIANCE_IPS" ]; then
+    SELF_JSON="$(printf '%s' "$APPLIANCE_IPS" | tr ',' '\n' | sed '/^$/d' | jq -R . | jq -cs .)"
+    _before="$(count "$NAABU_JSON")"
+    jq -c --argjson self "$SELF_JSON" \
+        'select((((.ip // .host) as $h | $self | index($h)) // false) | not)' \
+        "$NAABU_JSON" > "$NAABU_JSON.tmp" && mv "$NAABU_JSON.tmp" "$NAABU_JSON"
+    _after="$(count "$NAABU_JSON")"
+    if [ "$_before" != "$_after" ]; then
+        log "excluded $((_before - _after)) result(s) on this appliance's own address ($APPLIANCE_IPS)"
+    fi
+fi
+
+if [ ! -s "$NAABU_JSON" ]; then
+    log "nothing left to scan after excluding this appliance's own address"
+    printf 'scan %s: no open ports found (this appliance was the only host discovered)\n' "$RUN_ID" \
+        > "$RUN_DIR/summary.txt"
     exit 0
 fi
 

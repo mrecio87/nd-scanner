@@ -40,6 +40,13 @@
   this run should not be treated as a clean result.
 </div>
 
+<details class="log-panel no-print" id="findings-panel">
+  <summary>Findings so far (<span id="findings-count">0</span>)</summary>
+  <div id="findings-body" style="padding:2px 12px 12px">
+    <p class="empty">No findings yet.</p>
+  </div>
+</details>
+
 <details class="log-panel no-print" id="log-panel" open>
   <summary>Activity</summary>
   <pre class="log" id="log">Waiting for output…</pre>
@@ -51,8 +58,77 @@
   var logEl = document.getElementById('log');
   var pinned = true;   // follow the tail until the reader scrolls away from it
 
+  var DEFAULT_TITLE = 'ND-Scanner';
+  var flashingComplete = false;
+  document.title = DEFAULT_TITLE;   // replaces the static title while the first poll is in flight
+
+  document.addEventListener('visibilitychange', function () {
+    if (flashingComplete && document.visibilityState === 'visible') {
+      document.title = DEFAULT_TITLE;
+      flashingComplete = false;
+    }
+  });
+
   logEl.addEventListener('scroll', function () {
     pinned = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 32;
+  });
+
+  var findingsPanel = document.getElementById('findings-panel');
+  var findingsBody = document.getElementById('findings-body');
+  var findingsCount = document.getElementById('findings-count');
+
+  function el(tag, cls, text) {
+    var e = document.createElement(tag);
+    if (cls) e.className = cls;
+    if (text !== undefined) e.textContent = text;
+    return e;
+  }
+
+  function renderFindings(d) {
+    findingsCount.textContent = d.total;
+    findingsBody.innerHTML = '';
+    if (!d.findings.length) {
+      findingsBody.appendChild(el('p', 'empty', 'No findings yet.'));
+      return;
+    }
+    d.findings.forEach(function (f) {
+      var card = el('div', 'finding');
+
+      var head = el('div', 'finding-head');
+      head.appendChild(el('div', 'finding-title', f.name));
+      var badge = el('span', 'badge');
+      var dot = el('span', 'sev-dot s-' + f.severity);
+      badge.appendChild(dot);
+      badge.appendChild(document.createTextNode(f.severity_label));
+      head.appendChild(badge);
+      card.appendChild(head);
+
+      if (f.description) card.appendChild(el('p', null, f.description));
+
+      var assets = el('div', 'assets');
+      f.assets.forEach(function (a) { assets.appendChild(el('span', 'asset', a)); });
+      if (f.asset_count > f.assets.length) {
+        assets.appendChild(el('span', 'asset', '+' + (f.asset_count - f.assets.length) + ' more'));
+      }
+      card.appendChild(assets);
+
+      findingsBody.appendChild(card);
+    });
+    if (d.truncated) {
+      findingsBody.appendChild(el('p', 'hint',
+        d.truncated + ' more not shown here. The full list is in the report once the scan finishes.'));
+    }
+  }
+
+  function loadFindings() {
+    fetch({{ url_for('scan_findings', run_id=run_id)|tojson }})
+      .then(function (r) { return r.json(); })
+      .then(renderFindings)
+      .catch(function () {});
+  }
+
+  findingsPanel.addEventListener('toggle', function () {
+    if (findingsPanel.open) loadFindings();
   });
 
   function setText(id, v) { document.getElementById(id).textContent = v; }
@@ -69,10 +145,12 @@
     fetch({{ url_for('api_scan', run_id=run_id)|tojson }})
       .then(function (r) { return r.json(); })
       .then(function (d) {
-        document.querySelectorAll('#steps .step').forEach(function (el) {
-          var n = parseInt(el.dataset.stage, 10);
-          el.classList.toggle('done', d.stage > n || d.state === 'done');
-          el.classList.toggle('active', d.stage === n && d.state === 'running');
+        document.title = (d.state === 'running') ? 'Scan Running' : document.title;
+
+        document.querySelectorAll('#steps .step').forEach(function (stepEl) {
+          var n = parseInt(stepEl.dataset.stage, 10);
+          stepEl.classList.toggle('done', d.stage > n || d.state === 'done');
+          stepEl.classList.toggle('active', d.stage === n && d.state === 'running');
         });
 
         setText('s-hosts', d.hosts);
@@ -83,9 +161,11 @@
 
         if (d.degraded) {
           document.getElementById('degraded-detail').textContent =
-            d.unreachable + '% of checks could not reach their target.';
+            d.unreachable + '% of ports found open earlier in the scan stopped answering.';
           document.getElementById('degraded').style.display = 'block';
         }
+
+        if (findingsPanel.open) loadFindings();
 
         logEl.textContent = d.log || 'Waiting for output…';
         if (pinned) logEl.scrollTop = logEl.scrollHeight;
@@ -111,6 +191,15 @@
           }
           document.getElementById('stop-form').style.display = 'none';
           document.getElementById(bad ? 'failed' : 'actions').style.display = 'block';
+
+          // Notify a backgrounded tab that the scan is done; a tab the reader
+          // is already looking at needs no flash, since they can see it.
+          if (document.visibilityState === 'hidden') {
+            document.title = 'Scan Complete';
+            flashingComplete = true;
+          } else {
+            document.title = DEFAULT_TITLE;
+          }
           return;
         }
         if (!done) setTimeout(poll, 2500);

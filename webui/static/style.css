@@ -156,7 +156,7 @@ tr:last-child td { border-bottom: none; }
 .tile .k { font-size: 12px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.7px; }
 
 /* --------------------------------------------------------------- severity
-   Status colour never carries meaning alone: every badge pairs the swatch
+   Status color never carries meaning alone: every badge pairs the swatch
    with the severity word, and bar values sit in ink outside the fill. */
 
 .sev-dot {

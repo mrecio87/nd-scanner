@@ -110,7 +110,7 @@ reservation avoids the issue entirely.
 
 ### 3. Scan
 
-Open `https://<appliance-ip>:8080`, sign in, enter the authorised ranges, and run
+Open `https://<appliance-ip>:8080`, sign in, enter the authorized ranges, and run
 a **Quick look** first. It takes a couple of minutes and tells you whether you can
 actually reach the targets. Then run the real scan.
 
