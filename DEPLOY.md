@@ -83,8 +83,10 @@ An appliance that has never been logged into is not a tested appliance.
 
 ### 7. Optional: trust the certificate
 
-Only worth doing if a client will be looking at the screen — it removes the browser
-warning and adds no security. See the TLS section of `README.md`.
+Worth doing only if someone other than you will be looking at the screen — it
+removes the browser warning and adds no security. Copy `certs/appliance.crt` to
+the machine you browse from and import it into its trusted-root store. Never copy
+`appliance.key`.
 
 ---
 
