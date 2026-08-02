@@ -4,8 +4,6 @@
 Deliberately small — the appliance's whole reason for existing is a low resource
 footprint, so this is Flask + the standard library and nothing else.
 """
-import base64
-import hashlib
 import json
 import os
 import re
@@ -60,56 +58,18 @@ app.config.update(
 
 # --------------------------------------------------------------- passwords
 #
-# Three sources, in order:
-#   1. WEBUI_PASSWORD      -- plaintext, for a one-off appliance
-#   2. WEBUI_PASSWORD_HASH -- the fleet password, verified against a hash that
-#                             ships in the repo. The plaintext never exists in
-#                             git, so every appliance authenticates the same
-#                             way without anyone typing it at deploy time.
-#   3. neither             -- generate one and log it, so the UI is never open.
-
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2 ** 14, 8, 1
-
-
-def hash_password(pw, salt=None):
-    # Fields are ':'-separated, not the conventional '$': this string travels
-    # through a .env file that docker compose interpolates, and '$' fields get
-    # eaten as undefined variables. ':' never appears in base64.
-    salt = salt or secrets.token_bytes(16)
-    dk = hashlib.scrypt(pw.encode("utf-8"), salt=salt,
-                        n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P, dklen=32)
-    b64 = lambda b: base64.b64encode(b).decode("ascii")
-    return f"scrypt:{SCRYPT_N}:{SCRYPT_R}:{SCRYPT_P}:{b64(salt)}:{b64(dk)}"
-
-
-def verify_hash(pw, stored):
-    try:
-        algo, n, r, p, salt_b64, dk_b64 = stored.strip().split(":")
-        if algo != "scrypt":
-            return False
-        dk = hashlib.scrypt(pw.encode("utf-8"),
-                            salt=base64.b64decode(salt_b64),
-                            n=int(n), r=int(r), p=int(p), dklen=32)
-        return secrets.compare_digest(dk, base64.b64decode(dk_b64))
-    except (ValueError, TypeError):
-        return False
-
+# The password is chosen at install time and lives in .env. If none is set we
+# generate one and log it, so the UI is never left open.
 
 PASSWORD = os.environ.get("WEBUI_PASSWORD", "")
-PASSWORD_HASH = os.environ.get("WEBUI_PASSWORD_HASH", "").strip()
 _GENERATED = False
-if not PASSWORD and not PASSWORD_HASH:
-    # Never leave the UI open: invent a password and print it to the container log.
+if not PASSWORD:
     PASSWORD = secrets.token_urlsafe(9)
     _GENERATED = True
 
 
 def check_password(attempt):
-    if PASSWORD:
-        return secrets.compare_digest(attempt, PASSWORD)
-    if PASSWORD_HASH:
-        return verify_hash(attempt, PASSWORD_HASH)
-    return False
+    return bool(PASSWORD) and secrets.compare_digest(attempt, PASSWORD)
 
 JOBS = {}
 JOBS_LOCK = threading.Lock()
@@ -573,19 +533,6 @@ def report(run_id):
 
 
 if __name__ == "__main__":
-    # `app.py --hash` prints a fleet password hash to commit to the repo.
-    if "--hash" in sys.argv:
-        pw = os.environ.get("FLEET_PASSWORD", "")
-        if not pw:
-            import getpass
-            pw = getpass.getpass("Fleet password: ") if sys.stdin.isatty() \
-                else sys.stdin.readline().rstrip("\n")
-        if not pw:
-            print("No password given.", file=sys.stderr)
-            raise SystemExit(1)
-        print(hash_password(pw))
-        raise SystemExit(0)
-
     reap_orphaned_runs()
 
     port = int(os.environ.get("WEBUI_PORT", "8080"))

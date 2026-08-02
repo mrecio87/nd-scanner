@@ -79,9 +79,6 @@ services:
       # Leave WEBUI_PASSWORD unset and one is generated per start and printed
       # to `docker compose logs web` — the UI is never left unauthenticated.
       WEBUI_PASSWORD: "${WEBUI_PASSWORD:-}"
-      # Fleet password, verified against the hash in fleet.hash. The plaintext
-      # is never stored anywhere in the repo.
-      WEBUI_PASSWORD_HASH: "${WEBUI_PASSWORD_HASH:-}"
       WEBUI_SECRET: "${WEBUI_SECRET:-}"
       BRAND_NAME: "${BRAND_NAME:-Network Defenders}"
       BRAND_TAGLINE: "${BRAND_TAGLINE:-Network Security Assessment}"

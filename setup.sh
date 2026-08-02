@@ -10,18 +10,11 @@ usage() {
     cat <<'USAGE'
 Usage: ./setup.sh [options]
 
-  (no options)        Use the fleet password from fleet.hash if present,
-                      otherwise generate a unique password for this appliance.
-      --new-fleet-password
-                      Set (or rotate) the fleet password. Prompts for it, writes
-                      its hash to fleet.hash, applies it to THIS appliance, and
-                      tells you to commit and push so the rest of the fleet picks
-                      it up. The plaintext is never written to the repo.
-  -f, --fleet         Prompt for a shared password and store it in this box's
-                      .env as plaintext. Prefer --new-fleet-password.
-      --password PW   Set the password non-interactively. Convenient for
-                      provisioning scripts, but the value lands in your shell
-                      history -- prefer --fleet when typing by hand.
+  (no options)        Keep the password already in .env, or generate one.
+  -p, --prompt        Prompt for the password to use on this appliance.
+      --password PW   Set it non-interactively, for provisioning scripts. The
+                      value lands in your shell history -- prefer --prompt when
+                      typing by hand.
   -h, --help          Show this.
 
 Everything else (LAN address, session key, PUID/PGID, certificate) is detected
@@ -29,14 +22,11 @@ or generated per appliance and preserved across re-runs.
 USAGE
 }
 
-FLEET=0
+PROMPT=0
 CLI_PASSWORD=""
-NEW_FLEET_HASH=0
-NEW_HASH_WRITTEN=0
 while [ $# -gt 0 ]; do
     case "$1" in
-        --new-fleet-password) NEW_FLEET_HASH=1; shift ;;
-        -f|--fleet)     FLEET=1; shift ;;
+        -p|--prompt)    PROMPT=1; shift ;;
         --password)     CLI_PASSWORD="${2:-}"; shift 2 ;;
         --password=*)   CLI_PASSWORD="${1#*=}"; shift ;;
         -h|--help)      usage; exit 0 ;;
@@ -75,50 +65,6 @@ d() {  # run a docker command, transparently handling the stale-group case
     if [ "$USE_SG" = "1" ]; then sg docker -c "$*"; else eval "$*"; fi
 }
 
-# ------------------------------------------------- fleet password (one-off)
-
-if [ "$NEW_FLEET_HASH" = "1" ]; then
-    head_ "Setting the fleet password"
-    say "This runs once. The hash goes in the repo; the password itself does not."
-    say ""
-    while :; do
-        printf '  Fleet password: '; read -rs p1; printf '\n'
-        printf '  Confirm:        '; read -rs p2; printf '\n'
-        [ -n "$p1" ] || { warn "Empty. Try again."; continue; }
-        [ "$p1" = "$p2" ] || { warn "They do not match. Try again."; continue; }
-        if [ "${#p1}" -lt 12 ]; then
-            warn "Under 12 characters. Its hash will sit in the repo, so make it
-      strong enough to survive the repo leaking. Keep it in your password
-      manager -- technicians paste it, they do not have to memorise it."
-            printf '  Use it anyway? [y/N] '; read -r ok
-            case "$ok" in [yY]*) ;; *) continue ;; esac
-        fi
-        break
-    done
-
-    d "docker compose build" >/dev/null 2>&1 || die "Build failed; cannot hash without the image."
-    H="$(printf '%s\n' "$p1" | d "docker compose run --rm --no-deps -T --entrypoint python3 web /opt/webui/app.py --hash" | tr -d '\r')"
-    case "$H" in
-        scrypt:*) ;;
-        *) die "Hashing failed. Got: ${H:-<empty>}" ;;
-    esac
-
-    {
-        printf '# Fleet password hash (scrypt). Safe to commit: this is a one-way\n'
-        printf '# hash, not the password. Any appliance cloning this repo will\n'
-        printf '# authenticate with the fleet password automatically.\n'
-        printf '# Regenerate with: ./setup.sh --new-fleet-password\n'
-        printf '%s\n' "$H"
-    } > fleet.hash
-
-    say "wrote fleet.hash"
-    # Deliberately does NOT exit: writing the hash and leaving this appliance on
-    # the previous password is the obvious trap, and it is not obvious from the
-    # outside that anything is wrong -- the login simply keeps rejecting you.
-    # Fall through and apply it here as well.
-    NEW_HASH_WRITTEN=1
-fi
-
 # ------------------------------------------------------ prior client data
 
 if compgen -G "output/scan-*" >/dev/null 2>&1; then
@@ -147,58 +93,50 @@ chmod 600 .env
 env_has() { grep -qE "^$1=" .env; }
 env_add() { printf '%s=%s\n' "$1" "$2" >> .env; }
 
-set_password() {
-    # A plaintext password for this box overrides the fleet hash; drop the hash
-    # so .env has exactly one source of truth.
-    sed -i -e '/^WEBUI_PASSWORD=/d' -e '/^WEBUI_PASSWORD_HASH=/d' .env
-    env_add WEBUI_PASSWORD "$1"
+set_password() { sed -i '/^WEBUI_PASSWORD=/d' .env; env_add WEBUI_PASSWORD "$1"; }
+
+gen_password() {
+    # cut, not head: under `set -o pipefail` a truncating head closes the pipe
+    # and the SIGPIPE from tr would abort the whole script.
+    head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-20
 }
-set_hash()     { sed -i '/^WEBUI_PASSWORD_HASH=/d' .env; env_add WEBUI_PASSWORD_HASH "$1"; }
 
 NEW_PASSWORD=""
-FLEET_SET=0
-FLEET_HASHED=0
-if [ -f fleet.hash ] && [ -s fleet.hash ] && [ -z "$CLI_PASSWORD" ] && [ "$FLEET" = "0" ] \
-   && { [ "$NEW_HASH_WRITTEN" = "1" ] \
-        || ! { env_has WEBUI_PASSWORD && [ -n "$(grep -E '^WEBUI_PASSWORD=' .env | cut -d= -f2-)" ]; }; }; then
-    # The fleet password travels with the repo as a hash, so a new appliance
-    # authenticates with the fleet credential without anyone typing it here.
-    sed -i '/^WEBUI_PASSWORD=/d' .env
-    set_hash "$(grep -v '^#' fleet.hash | grep -m1 . )"
-    FLEET_HASHED=1
-    say "password:  using the fleet password (verified against fleet.hash)"
-elif [ -n "$CLI_PASSWORD" ]; then
+CHOSEN=0
+if [ -n "$CLI_PASSWORD" ]; then
     set_password "$CLI_PASSWORD"
-    FLEET_SET=1
+    CHOSEN=1
     say "password:  set from --password"
-elif [ "$FLEET" = "1" ]; then
+elif [ "$PROMPT" = "1" ]; then
     while :; do
-        printf '  Fleet password: '
+        printf '  Password for the web UI (Enter to generate one): '
         read -rs p1; printf '\n'
-        printf '  Confirm:        '
+        if [ -z "$p1" ]; then
+            NEW_PASSWORD="$(gen_password)"
+            set_password "$NEW_PASSWORD"
+            say "password:  generated (shown at the end)"
+            break
+        fi
+        printf '  Confirm:                                        '
         read -rs p2; printf '\n'
-        [ -n "$p1" ] || { warn "Empty. Try again."; continue; }
         [ "$p1" = "$p2" ] || { warn "They do not match. Try again."; continue; }
         if [ "${#p1}" -lt 12 ]; then
-            warn "Under 12 characters. This one credential opens every appliance
-      in the fleet, including boxes sitting on networks you do not control."
+            warn "Under 12 characters. This appliance sits on a network you do
+      not control while it scans."
             printf '  Use it anyway? [y/N] '
             read -r ok
             case "$ok" in [yY]*) ;; *) continue ;; esac
         fi
         set_password "$p1"
-        FLEET_SET=1
-        say "password:  fleet password set"
+        CHOSEN=1
+        say "password:  set"
         break
     done
 elif env_has WEBUI_PASSWORD && [ -n "$(grep -E '^WEBUI_PASSWORD=' .env | cut -d= -f2-)" ]; then
     say "password:  keeping the one already in .env"
 else
-    sed -i '/^WEBUI_PASSWORD=$/d' .env
-    # cut, not head: under `set -o pipefail` a truncating head closes the pipe
-    # and the SIGPIPE from tr would abort the whole script.
-    NEW_PASSWORD="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9' | cut -c1-20)"
-    env_add WEBUI_PASSWORD "$NEW_PASSWORD"
+    NEW_PASSWORD="$(gen_password)"
+    set_password "$NEW_PASSWORD"
     say "password:  generated (shown at the end -- save it now, it is not repeated)"
 fi
 
@@ -263,10 +201,8 @@ say "  URL:         ${BOLD}https://${LAN_IP}:${PORT}${RESET}"
 if [ -n "$NEW_PASSWORD" ]; then
     say "  Password:    ${BOLD}${NEW_PASSWORD}${RESET}"
     say "               ^ save this to your password manager now"
-elif [ "$FLEET_HASHED" = "1" ]; then
-    say "  Password:    the fleet password (from fleet.hash -- see your password manager)"
-elif [ "$FLEET_SET" = "1" ]; then
-    say "  Password:    (the fleet password you just set)"
+elif [ "$CHOSEN" = "1" ]; then
+    say "  Password:    (the one you just set)"
 else
     say "  Password:    (unchanged -- see WEBUI_PASSWORD in .env)"
 fi
@@ -282,15 +218,3 @@ say "  Scans run from this host, so it can only reach networks this host routes 
 say "  Only scan what you have written authorisation to test."
 say ""
 
-if [ "$NEW_HASH_WRITTEN" = "1" ]; then
-    head_ "One more step"
-    say "This appliance is already using the new fleet password. To roll it out"
-    say "to the rest of the fleet, commit and push the hash:"
-    say ""
-    say "    git add fleet.hash && git commit -m 'Rotate fleet password' && git push"
-    say ""
-    say "Other appliances pick it up on their next 'git pull' + ./setup.sh."
-    say "Keep the password in your password manager -- it cannot be recovered"
-    say "from the hash."
-    say ""
-fi

@@ -15,7 +15,7 @@ change afterwards:
 
 - **Enable full-disk encryption.** Choose *Guided — use entire disk and set up
   encrypted LVM*. These boxes travel and can be stolen; disk encryption is the
-  control that keeps a lost appliance from handing over the fleet password, the
+  control that keeps a lost appliance from handing over its password, the
   TLS key, and any client findings still on disk. You cannot retrofit this
   without reinstalling.
 - **Skip the desktop environment.** Under *Software selection*, untick everything
@@ -62,11 +62,11 @@ box hands over your GitHub access along with everything else.
 ### 5. Run setup
 
 ```bash
-./setup.sh
+./setup.sh --prompt
 ```
 
-This detects the LAN address for the TLS certificate, applies the fleet password
-from `fleet.hash`, sets file ownership, builds the image, and starts the web UI.
+You are asked for a password (Enter generates a strong one). This detects the LAN address for the TLS certificate, sets the appliance
+password, sets file ownership, builds the image, and starts the web UI.
 The first build pulls the scanning tools and ~13,000 nuclei templates, so give it
 a few minutes.
 
@@ -76,7 +76,7 @@ fingerprint**. Note the fingerprint.
 ### 6. Check it works before you leave
 
 Browse to the URL it printed, compare the certificate fingerprint, log in with the
-fleet password, and run a **Quick look** scan against something harmless on your
+password you set, and run a **Quick look** scan against something harmless on your
 own network. Confirm a report renders.
 
 An appliance that has never been logged into is not a tested appliance.
@@ -149,8 +149,5 @@ cd netscan-appliance && ./setup.sh
 to pick up its own address and certificate. That also avoids putting GitHub
 credentials on every box.
 
-To roll out a rotated fleet password afterwards, on each appliance:
-
-```bash
-cd netscan-appliance && git pull && ./setup.sh
-```
+Each imaged box keeps the password baked into the image. To give one its own,
+run `./setup.sh --prompt` on it.

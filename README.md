@@ -17,10 +17,10 @@ docker compose up -d web
 
 Then open `https://<appliance-ip>:8080` (see TLS below — the first visit will warn about the self-signed certificate).
 
-**Set a password before you deploy.** Put `WEBUI_PASSWORD=...` in `.env`. If you
-leave it unset, a random one is generated at each start and printed to
-`docker compose logs web` — the UI is never left unauthenticated, but you'd have
-to fetch the password from the log each time.
+**The password is set at install time.** `install.sh` prompts for one; press Enter
+to generate a strong one instead. See Passwords below.
+
+
 
 | Variable | Default | Notes |
 |---|---|---|
@@ -156,10 +156,17 @@ host where it can route to the networks being assessed.
 **1. Provision the host** — a VM or physical box on the target segment, Debian or
 Ubuntu, with Docker and git installed.
 
-**2. Clone and run setup:**
+**2. Install.** One line on a fresh Debian or Ubuntu box — installs Docker and git
+if missing, clones, prompts for a password, builds, and starts:
 
 ```bash
-git clone https://github.com/mrecio87/nd-scanner.git netscan-appliance && cd netscan-appliance && ./setup.sh
+curl -fsSL https://raw.githubusercontent.com/mrecio87/nd-scanner/main/install.sh | bash
+```
+
+Or, on a machine that already has Docker:
+
+```bash
+git clone https://github.com/mrecio87/nd-scanner.git netscan-appliance && cd netscan-appliance && ./setup.sh --prompt
 ```
 
 `setup.sh` detects the LAN address and writes `TLS_SAN`, generates a unique
@@ -190,61 +197,33 @@ docker compose down && rm -rf output/scan-* certs/
 
 `setup.sh` warns if it finds another client's results still present.
 
-### The fleet password
+### Passwords
 
-Every appliance uses the same password, and nobody types it at deploy time — but
-the password itself is never stored in the repo. Only a one-way scrypt hash is,
-in `fleet.hash`.
+Each appliance has its own password, set when you install it.
 
-Set it once, from a machine with the repo checked out:
+The one-line installer prompts for one before anything starts listening — press
+Enter and it generates a strong one instead:
 
-```bash
-./setup.sh --new-fleet-password
-git add fleet.hash && git commit -m "Set fleet password" && git push
+```
+Password for the web UI (Enter to generate one):
 ```
 
-From then on, deploying an appliance is just:
+`./setup.sh --prompt` does the same on an existing checkout, and
+`./setup.sh --password '...'` sets it non-interactively for provisioning
+scripts (the value lands in your shell history, so prefer `--prompt` by hand).
 
-```bash
-git clone https://github.com/mrecio87/nd-scanner.git netscan-appliance && cd netscan-appliance && ./setup.sh
-```
+With no flag at all, `setup.sh` keeps whatever is already in `.env`, or generates
+a password on a fresh box and prints it once. The UI is never left without one.
 
-`setup.sh` finds `fleet.hash` and configures the appliance to accept the fleet
-password. No prompt, no manual editing, and no plaintext anywhere in git.
+Keep them in a password manager, one entry per appliance. To change a password
+later, edit `WEBUI_PASSWORD` in `.env` and run `docker compose up -d web`, or
+just re-run `./setup.sh --prompt`.
 
-**Rotating** is the same command again, followed by a commit and push. Each
-appliance picks up the new password on its next `git pull` + `./setup.sh`. Rotate
-when a technician leaves.
-
-Keep the password itself in your password manager — it cannot be recovered from
-the hash. Make it long: the hash sits in the repo, so its resistance to an
-offline attack is whatever the password's strength gives it. Since technicians
-paste it rather than memorise it, there is no reason to keep it short.
-
-**`fleet.hash` belongs only in a private repository.** If you install from a
-public one, keep the hash out of it and supply it at install time instead:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/mrecio87/nd-scanner/main/install.sh \
-  | NETSCAN_FLEET_HASH='scrypt:...' bash
-```
-
-Forget the variable and you do not get an open appliance — `setup.sh` falls back
-to generating a unique password for that box.
-
-Two things worth knowing:
-
-- **A published hash is only as strong as the password behind it.** scrypt makes
-  a long random password impractical to crack, but a weak one becomes an offline
-  exercise for anyone who can read the repo.
-- **One shared credential means no attribution.** You cannot tell which
-  technician ran which scan. If that ever matters contractually, move to
-  per-technician accounts.
-
-To give a single appliance its own password instead, set `WEBUI_PASSWORD` in its
-`.env` — that takes precedence over the fleet hash. `./setup.sh --fleet` stores a
-shared password as plaintext in `.env` and exists only for boxes that cannot pull
-from git; prefer the hash.
+There is deliberately no shared fleet credential. One password across every
+appliance means anyone who obtains it at one site can reach every other box you
+have deployed, and revoking it means visiting all of them. If you later need to
+know which technician ran which scan, that calls for per-technician accounts
+rather than a shared secret.
 
 ## Scope note
 

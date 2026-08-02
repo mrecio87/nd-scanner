@@ -10,8 +10,8 @@
 #   NETSCAN_DIR         where to install          (default: $HOME/netscan-appliance)
 #   NETSCAN_REPO        repository URL
 #   NETSCAN_BRANCH      branch to check out       (default: main)
-#   NETSCAN_FLEET_HASH  fleet password hash; written to fleet.hash before setup
-#                       runs, so a public repo need not carry it
+#   NETSCAN_PASSWORD    set the web UI password non-interactively; otherwise
+#                       you are prompted (Enter generates a strong one)
 #
 set -euo pipefail
 
@@ -106,18 +106,17 @@ main() {
 
     cd "$NETSCAN_DIR"
 
-    if [ -n "${NETSCAN_FLEET_HASH:-}" ]; then
-        case "$NETSCAN_FLEET_HASH" in
-            scrypt:*) printf '%s\n' "$NETSCAN_FLEET_HASH" > fleet.hash
-                      say "fleet password hash supplied" ;;
-            *) die "NETSCAN_FLEET_HASH does not look like a hash (expected scrypt:...)." ;;
-        esac
-    fi
-
     # -------------------------------------------------------------- setup
 
     [ -x ./setup.sh ] || chmod +x ./setup.sh
-    exec ./setup.sh
+
+    # --prompt asks for the password before anything starts listening, so the
+    # UI is never reachable unauthenticated. NETSCAN_PASSWORD skips the prompt
+    # for unattended provisioning.
+    if [ -n "${NETSCAN_PASSWORD:-}" ]; then
+        exec ./setup.sh --password "$NETSCAN_PASSWORD"
+    fi
+    exec ./setup.sh --prompt
 }
 
 main "$@"
