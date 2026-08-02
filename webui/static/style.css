@@ -213,6 +213,22 @@ tr:last-child td { border-bottom: none; }
   display: flex; align-items: center; gap: 10px;
   margin: 26px 0 6px; font-size: 15px; font-weight: 700;
 }
+
+/* ----------------------------------------------------------- host cards */
+
+.host-card { margin-bottom: 14px; }
+.host-card table { margin-top: 4px; }
+.host-head {
+  display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; gap: 10px; margin-bottom: 10px;
+}
+.host-id { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.host-ip { font-size: 15px; font-weight: 700; color: var(--ink); }
+.host-hostname { font-size: 13.5px; color: var(--ink-2); }
+.os-badge {
+  background: #eef5fd; border-color: var(--brand); color: var(--brand-deep);
+  text-transform: none; letter-spacing: 0; font-weight: 600;
+}
 .sev-group-note { color: var(--ink-2); font-size: 13.5px; margin: 0 0 12px; font-weight: 400; }
 
 /* ---------------------------------------------------------------- status */

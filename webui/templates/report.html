@@ -123,25 +123,36 @@
 
 {# ------------------------------------------------------------- inventory #}
 <h2>Systems and services discovered</h2>
-<div class="card">
-  {% if r.hosts %}
-  <table>
-    <tr><th>System</th><th>Port</th><th>Service</th><th>Software detected</th></tr>
-    {% for ip, ports in r.hosts.items() %}
-      {% for p in ports %}
+{% if r.hosts %}
+  {% for ip, host in r.hosts.items() %}
+  <div class="card host-card">
+    <div class="host-head">
+      <div class="host-id">
+        <span class="mono host-ip">{{ ip }}</span>
+        {% if host.hostname %}<span class="host-hostname">{{ host.hostname }}</span>{% endif %}
+      </div>
+      {% if host.os %}<span class="badge os-badge">{{ host.os }}</span>{% endif %}
+    </div>
+    <table>
+      <tr><th>Port</th><th>Service</th><th>Software detected</th></tr>
+      {% for p in host.ports %}
       <tr>
-        <td class="mono">{% if loop.first %}{{ ip }}{% endif %}</td>
         <td class="mono">{{ p.port }}</td>
         <td>{{ p.service or "-" }}</td>
-        <td>{{ p.product or "-" }}</td>
+        <td>{{ p.product or "-" }}{% if p.extrainfo %} <span class="hint" style="display:inline">({{ p.extrainfo }})</span>{% endif %}</td>
       </tr>
       {% endfor %}
-    {% endfor %}
-  </table>
-  {% else %}
-  <p class="empty">No reachable systems were found in the scanned range.</p>
-  {% endif %}
-</div>
+    </table>
+  </div>
+  {% endfor %}
+{% else %}
+  <div class="card"><p class="empty">No reachable systems were found in the scanned range.</p></div>
+{% endif %}
+
+<p class="hint" style="margin-top:-6px">
+  Hostname and OS are best-effort: a device with no reverse-DNS record, or one
+  nmap cannot fingerprint confidently, simply shows nothing rather than a guess.
+</p>
 
 {# ----------------------------------------------------------------- scope #}
 <h2>Scope</h2>

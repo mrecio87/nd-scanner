@@ -111,7 +111,7 @@ Environment variables in `.env`. The defaults are conservative on purpose.
 | `NAABU_RATE_LOCAL` | `2000` | Rate `auto` uses for directly attached targets |
 | `NAABU_RATE_ROUTED` | `300` | Rate `auto` uses when anything is routed |
 | `HOST_SUBNETS` | *(auto-detected)* | Directly attached subnets, written by `setup.sh` |
-| `NMAP_ARGS` | `-sV -Pn -T3` | Add `-sC` for default scripts, `-T2` to go quieter |
+| `NMAP_ARGS` | `-sV -O -Pn -T3` | `-O` guesses the OS; drop it for a faster, quieter scan. Add `-sC` for default scripts, `-T2` to slow down |
 | `NUCLEI_SEVERITY` | `info,low,medium,high,critical` | Drop `info` for findings only |
 | `NUCLEI_TAGS` | | e.g. `cve,exposure` to narrow the template set |
 | `NUCLEI_RATE` | `150` | Requests/sec |

@@ -410,8 +410,18 @@ def start_scan(targets, opts):
 # ----------------------------------------------------------------- parsing
 
 def parse_hosts(run_dir):
-    """Open ports from naabu, enriched with nmap service/version detail."""
+    """Open ports from naabu, enriched with nmap's service, hostname and OS detail.
+
+    Returns {ip: {"hostname": str, "os": str, "ports": [...]}}. hostname and os
+    are best-effort and often empty -- a device with no PTR record or that
+    nmap cannot fingerprint confidently simply has nothing to show, which is
+    preferable to guessing.
+    """
     hosts = {}
+
+    def host_entry(ip):
+        return hosts.setdefault(ip, {"hostname": "", "os": "", "ports": {}})
+
     naabu = run_dir / "naabu.json"
     if naabu.exists():
         for line in naabu.read_text(errors="replace").splitlines():
@@ -425,8 +435,9 @@ def parse_hosts(run_dir):
             ip = d.get("ip") or d.get("host")
             if not ip:
                 continue
-            hosts.setdefault(ip, {})[int(d.get("port", 0))] = {
-                "port": int(d.get("port", 0)), "service": "", "product": ""}
+            pn = int(d.get("port", 0))
+            host_entry(ip)["ports"][pn] = {
+                "port": pn, "service": "", "product": "", "extrainfo": ""}
 
     for xml in sorted((run_dir / "nmap").glob("*.xml")) if (run_dir / "nmap").is_dir() else []:
         try:
@@ -438,21 +449,42 @@ def parse_hosts(run_dir):
             if addr_el is None:
                 continue
             ip = addr_el.get("addr")
+            entry = host_entry(ip)
+
+            hn_el = host.find("hostnames")
+            if hn_el is not None and not entry["hostname"]:
+                names = hn_el.findall("hostname")
+                ptr = next((n for n in names if n.get("type") == "PTR"), None)
+                chosen = ptr or (names[0] if names else None)
+                if chosen is not None and chosen.get("name"):
+                    entry["hostname"] = chosen.get("name")
+
+            os_el = host.find("os")
+            if os_el is not None and not entry["os"]:
+                matches = os_el.findall("osmatch")
+                if matches:
+                    best = max(matches, key=lambda m: int(m.get("accuracy", 0)))
+                    entry["os"] = f'{best.get("name")} ({best.get("accuracy")}% confidence)'
+
             for p in host.findall(".//port"):
                 st = p.find("state")
                 if st is None or st.get("state") != "open":
                     continue
                 pn = int(p.get("portid"))
                 svc = p.find("service")
-                entry = hosts.setdefault(ip, {}).setdefault(
-                    pn, {"port": pn, "service": "", "product": ""})
+                pentry = entry["ports"].setdefault(
+                    pn, {"port": pn, "service": "", "product": "", "extrainfo": ""})
                 if svc is not None:
-                    entry["service"] = svc.get("name") or ""
-                    entry["product"] = " ".join(
+                    pentry["service"] = svc.get("name") or ""
+                    pentry["product"] = " ".join(
                         x for x in [svc.get("product"), svc.get("version")] if x)
+                    pentry["extrainfo"] = svc.get("extrainfo") or ""
 
-    return {ip: sorted(ports.values(), key=lambda e: e["port"])
-            for ip, ports in sorted(hosts.items())}
+    out = {}
+    for ip, h in sorted(hosts.items()):
+        h["ports"] = sorted(h["ports"].values(), key=lambda e: e["port"])
+        out[ip] = h
+    return out
 
 
 def parse_findings(run_dir):
@@ -532,7 +564,7 @@ def build_report(run_id):
         "actionable": actionable,
         "highest": highest,
         "scope": scope,
-        "total_services": sum(len(v) for v in hosts.values()),
+        "total_services": sum(len(v["ports"]) for v in hosts.values()),
         "started": status.get("started", ""),
         "client": status.get("client", ""),
     }

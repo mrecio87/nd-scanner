@@ -24,7 +24,7 @@ NAABU_RATE_ROUTED="${NAABU_RATE_ROUTED:-300}"
 # in its own scans on purpose.
 APPLIANCE_IPS="${APPLIANCE_IPS:-127.0.0.1}"
 
-NMAP_ARGS="${NMAP_ARGS:--sV -Pn -T3}"
+NMAP_ARGS="${NMAP_ARGS:--sV -O -Pn -T3}"
 
 NUCLEI_SEVERITY="${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
 NUCLEI_RATE="${NUCLEI_RATE:-150}"
