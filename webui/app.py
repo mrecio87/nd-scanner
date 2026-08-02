@@ -8,9 +8,14 @@ import json
 import os
 import re
 import secrets
+import shutil
+import signal
 import subprocess
 import sys
 import threading
+import time
+import urllib.error
+import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
@@ -24,6 +29,11 @@ BRAND_NAME = os.environ.get("BRAND_NAME", "Network Defenders")
 BRAND_TAGLINE = os.environ.get("BRAND_TAGLINE", "Network Security Assessment")
 BRANDING_DIR = Path(os.environ.get("BRANDING_DIR", "/branding"))
 CERT_DIR = Path(os.environ.get("CERT_DIR", "/certs"))
+TEMPLATE_DIR = Path(os.environ.get("NUCLEI_TEMPLATE_DIR", "/root/nuclei-templates"))
+HOST_SUBNETS = os.environ.get("HOST_SUBNETS", "")
+BUILD_REF = os.environ.get("BUILD_REF", "")
+BUILD_DATE = os.environ.get("BUILD_DATE", "")
+UPDATE_CHECK_URL = os.environ.get("UPDATE_CHECK_URL", "").strip()
 HTTPS = os.environ.get("HTTPS", "true").strip().lower() not in ("false", "0", "no", "off")
 TLS_SAN = os.environ.get("TLS_SAN", "")
 TLS_CERT = os.environ.get("TLS_CERT", "")
@@ -223,21 +233,37 @@ def scan_progress(run_dir):
     Read from the artefacts the tools are writing rather than by scraping the
     log, so the numbers match what ends up in the report.
     """
-    hosts, ports = set(), 0
-    naabu = run_dir / "naabu.json"
-    if naabu.exists():
-        for line in naabu.read_text(errors="replace").splitlines():
+    # naabu only writes naabu.json when the stage ends, but it prints each hit
+    # as it goes, so the log is the only live source during discovery. Merge
+    # both and de-duplicate, so the count climbs during the stage and does not
+    # jump or regress when the file finally appears.
+    found = set()
+
+    def collect(text):
+        for line in text.splitlines():
             line = line.strip()
-            if not line:
+            if not line.startswith("{") or '"port"' not in line:
                 continue
             try:
                 d = json.loads(line)
             except ValueError:
                 continue
+            if "template-id" in d:      # a nuclei finding, not a naabu hit
+                continue
             ip = d.get("ip") or d.get("host")
-            if ip:
-                hosts.add(ip)
-            ports += 1
+            port = d.get("port")
+            if ip and port is not None:
+                found.add((ip, int(port)))
+
+    naabu = run_dir / "naabu.json"
+    if naabu.exists():
+        collect(naabu.read_text(errors="replace"))
+    log_file = run_dir / "scan.log"
+    if log_file.exists():
+        collect(log_file.read_text(errors="replace"))
+
+    hosts = {ip for ip, _ in found}
+    ports = len(found)
 
     nmap_dir = run_dir / "nmap"
     services = len(list(nmap_dir.glob("*.xml"))) if nmap_dir.is_dir() else 0
@@ -304,14 +330,20 @@ def start_scan(targets, opts):
                  profile=opts.get("_profile", ""))
 
     logf = open(run_dir / "scan.log", "wb")
+    # New session, so the whole tool chain can be signalled as one group:
+    # killing scan.sh alone would leave naabu or nmap running.
     proc = subprocess.Popen([SCAN_SCRIPT], env=env, stdout=logf,
-                            stderr=subprocess.STDOUT, cwd="/")
+                            stderr=subprocess.STDOUT, cwd="/",
+                            start_new_session=True)
 
     def waiter():
         rc = proc.wait()
         logf.close()
-        write_status(run_dir, state="done" if rc == 0 else "failed",
-                     finished=utcnow().isoformat(), exit_code=rc)
+        # A cancelled run has already recorded why it ended; a non-zero exit is
+        # the expected consequence, not a failure to report.
+        if read_status(run_dir).get("state") != "cancelled":
+            write_status(run_dir, state="done" if rc == 0 else "failed",
+                         finished=utcnow().isoformat(), exit_code=rc)
         with JOBS_LOCK:
             JOBS.pop(run_id, None)
 
@@ -433,7 +465,11 @@ def build_report(run_id):
     if tf.exists():
         scope = [l for l in tf.read_text(errors="replace").splitlines() if l.strip()]
 
+    progress = scan_progress(run_dir)
+
     return {
+        "unreachable": progress["unreachable"],
+        "degraded": progress["degraded"],
         "run_id": run_id,
         "status": status,
         "hosts": hosts,
@@ -519,7 +555,11 @@ def inject_brand():
     return {"brand_name": BRAND_NAME, "brand_tagline": BRAND_TAGLINE,
             "brand_logo": logo_path() is not None,
             "sev_order": SEVERITY_ORDER, "sev_label": SEVERITY_LABEL,
-            "sev_meaning": SEVERITY_MEANING}
+            "sev_meaning": SEVERITY_MEANING,
+            "host_subnets": [x.strip() for x in HOST_SUBNETS.split(",") if x.strip()],
+            "template_count": template_count(),
+            "tpl_message": _tpl_update["message"],
+            "build_ref": BUILD_REF, "build_date": BUILD_DATE}
 
 
 @app.route("/login", methods=["GET", "POST"])
@@ -542,11 +582,17 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html", scans=list_scans())
+    return render_template("index.html", scans=list_scans(),
+                           flash=session.pop("flash", None))
 
 
 @app.route("/scan", methods=["POST"])
 def scan():
+    # The checkbox is required in the form, but a form can be posted directly.
+    if not request.form.get("authorised"):
+        return render_template("index.html", scans=list_scans(),
+                               error="Confirm you have written authorisation before starting a scan."), 400
+
     targets = clean_targets(request.form.get("targets", ""))
     if not targets:
         return render_template("index.html", scans=list_scans(),
@@ -566,6 +612,142 @@ def scan():
 
     run_id = start_scan(targets, opts)
     return redirect(url_for("scan_view", run_id=run_id))
+
+
+_templates = {"count": 0, "checked": 0.0}
+_tpl_update = {"running": False, "message": ""}
+
+
+def template_count():
+    """Cached: walking ~13k files on every page load would be wasteful."""
+    import time
+    if time.time() - _templates["checked"] > 300:
+        try:
+            _templates["count"] = sum(1 for _ in TEMPLATE_DIR.rglob("*.yaml"))
+        except OSError:
+            _templates["count"] = 0
+        _templates["checked"] = time.time()
+    return _templates["count"]
+
+
+@app.route("/templates/update", methods=["POST"])
+def templates_update():
+    if not _tpl_update["running"]:
+        _tpl_update.update(running=True, message="Updating templates...")
+
+        def run():
+            try:
+                r = subprocess.run(["nuclei", "-update-templates", "-silent"],
+                                   capture_output=True, text=True, timeout=600)
+                ok = r.returncode == 0
+            except (OSError, subprocess.SubprocessError):
+                ok = False
+            _tpl_update.update(
+                running=False,
+                message="Templates updated." if ok else
+                        "Could not update templates. This appliance may have no internet access.")
+            _templates["checked"] = 0.0
+
+        threading.Thread(target=run, daemon=True).start()
+    return redirect(url_for("index"))
+
+
+@app.route("/api/update-check")
+def update_check():
+    """Report whether the repository has moved on. Never updates anything.
+
+    Rebuilding from the web UI would mean giving this container control of the
+    Docker daemon, which is root on the appliance. Not worth it for the
+    convenience, so this only tells you a newer version exists.
+    """
+    if not BUILD_REF or not UPDATE_CHECK_URL:
+        return jsonify({"known": False, "reason": "No version information for this build."})
+    req = urllib.request.Request(
+        UPDATE_CHECK_URL,
+        headers={"Accept": "application/vnd.github+json", "User-Agent": "nd-scanner"})
+    try:
+        with urllib.request.urlopen(req, timeout=6) as r:
+            latest = json.loads(r.read().decode())["sha"][:len(BUILD_REF)]
+    except urllib.error.HTTPError as e:
+        # Distinguish these: "no internet" is wrong and misleading when the
+        # request arrived fine and GitHub simply declined to answer it.
+        if e.code == 404:
+            reason = ("This appliance was installed from a private repository, "
+                      "which the update check cannot read without credentials. "
+                      "Set UPDATE_CHECK_URL to a public repository to enable it.")
+        elif e.code in (403, 429):
+            reason = "GitHub is rate-limiting this appliance. Try again later."
+        else:
+            reason = f"GitHub returned HTTP {e.code}."
+        return jsonify({"known": False, "reason": reason})
+    except urllib.error.URLError as e:
+        return jsonify({"known": False,
+                        "reason": f"Could not reach GitHub ({e.reason}). No internet access?"})
+    except (ValueError, KeyError, TimeoutError, OSError):
+        return jsonify({"known": False, "reason": "GitHub returned an unexpected response."})
+    return jsonify({"known": True, "current": BUILD_REF, "latest": latest,
+                    "update_available": latest != BUILD_REF})
+
+
+@app.route("/scan/<run_id>/stop", methods=["POST"])
+def stop_scan(run_id):
+    run_dir = run_dir_for(run_id)
+    with JOBS_LOCK:
+        proc = JOBS.get(run_id)
+
+    if read_status(run_dir).get("state") == "running":
+        write_status(run_dir, state="cancelled", finished=utcnow().isoformat(),
+                     note="Stopped from the web interface.")
+
+    if proc is not None:
+        # Signal the whole process group: scan.sh's children do the actual work
+        # and outlive it if signalled individually.
+        try:
+            pgid = os.getpgid(proc.pid)
+        except OSError:
+            pgid = None
+
+        if pgid is not None:
+            try:
+                os.killpg(pgid, signal.SIGTERM)
+            except OSError:
+                pass
+
+            def reaper():
+                # Always escalate. scan.sh exits almost immediately once
+                # signalled, but naabu or nmap can keep running and keep
+                # putting traffic on the client's network, so waiting only on
+                # the parent is not enough.
+                try:
+                    proc.wait(timeout=8)
+                except subprocess.TimeoutExpired:
+                    pass
+                time.sleep(2)
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except OSError:
+                    pass
+
+            threading.Thread(target=reaper, daemon=True).start()
+
+    return redirect(url_for("scan_view", run_id=run_id))
+
+
+@app.route("/purge", methods=["POST"])
+def purge():
+    """Delete stored results. Running scans are left alone."""
+    removed = skipped = 0
+    for d in sorted(OUTPUT_ROOT.glob("scan-*")):
+        if not d.is_dir():
+            continue
+        if read_status(d).get("state") == "running":
+            skipped += 1
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        removed += 1
+    session["flash"] = (f"Deleted {removed} scan result(s)."
+                        + (f" {skipped} still running and left in place." if skipped else ""))
+    return redirect(url_for("index"))
 
 
 @app.route("/scan/<run_id>")

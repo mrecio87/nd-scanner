@@ -104,16 +104,26 @@ Environment variables in `.env`. The defaults are conservative on purpose.
 | `HTTPS` | `true` | TLS on by default. `false` serves cleartext |
 | `TLS_SAN` | *(auto-detected)* | Extra addresses for the certificate |
 | `TLS_CERT` / `TLS_KEY` | | Paths to your own certificate and key |
-| `SCAN_TYPE` | `s` | `s` = SYN (needs NET_RAW), `c` = TCP connect (unprivileged) |
+| `SCAN_TYPE` | `auto` | `auto` picks per run, `s` = SYN, `c` = TCP connect |
 | `NAABU_TOP_PORTS` | `1000` | Only `100`, `1000`, or `full`. Ignored if `NAABU_PORTS` is set |
 | `NAABU_PORTS` | | Explicit list, e.g. `80,443,8080-8090`, or `-` for all 65535 |
-| `NAABU_RATE` | `1000` | Packets/sec. Drop to around 200 on fragile networks |
+| `NAABU_RATE` | `1000` | Packets/sec, used when `SCAN_TYPE` is not `auto` |
+| `NAABU_RATE_LOCAL` | `2000` | Rate `auto` uses for directly attached targets |
+| `NAABU_RATE_ROUTED` | `300` | Rate `auto` uses when anything is routed |
+| `HOST_SUBNETS` | *(auto-detected)* | Directly attached subnets, written by `setup.sh` |
 | `NMAP_ARGS` | `-sV -Pn -T3` | Add `-sC` for default scripts, `-T2` to go quieter |
 | `NUCLEI_SEVERITY` | `info,low,medium,high,critical` | Drop `info` for findings only |
 | `NUCLEI_TAGS` | | e.g. `cve,exposure` to narrow the template set |
 | `NUCLEI_RATE` | `150` | Requests/sec |
 | `NUCLEI_UPDATE` | `false` | `true` refreshes templates before scanning |
 | `SKIP_NMAP` / `SKIP_NUCLEI` | `false` | Drop a stage |
+
+`SCAN_TYPE=auto` checks every target against the appliance's own subnets. If all
+of them are directly attached it uses SYN scanning at the local rate, since
+nothing in between can object. If anything is routed it drops to a connect scan
+at the lower rate, because half-open connections through a stateful firewall fill
+its state table and get the appliance blocked. Anything ambiguous, including a
+name that will not resolve, counts as routed.
 
 Templates are baked into the image, so a fresh appliance scans immediately without
 pulling them over the client's network. `docker-compose.yml` caps the container at

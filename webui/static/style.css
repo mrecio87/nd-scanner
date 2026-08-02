@@ -317,3 +317,39 @@ pre.log {
   .wrap { max-width: none; padding: 0; }
   a { color: #000; text-decoration: none; }
 }
+
+/* target chips on the new-scan form */
+.chips { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; margin-bottom: 9px; }
+.chips-label { font-size: 12.5px; color: var(--ink-2); font-weight: 400; }
+.chip {
+  font-family: ui-monospace, "Courier New", monospace;
+  font-size: 12.5px;
+  background: #eef5fd;
+  border: 1px solid var(--brand);
+  color: var(--brand-deep);
+  padding: 3px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+}
+.chip:hover { background: #ddecfb; }
+
+.notice {
+  background: #eef5fd;
+  color: #0f3b5c;
+  border-left: 4px solid var(--brand);
+  padding: 11px 14px;
+  border-radius: 6px;
+  margin-bottom: 16px;
+  font-size: 14px;
+}
+
+.confirm {
+  display: flex; align-items: center; gap: 9px;
+  font-weight: 400; font-size: 14px; margin-bottom: 18px;
+}
+.confirm input { width: auto; }
+
+@media (prefers-color-scheme: dark) {
+  body.app .chip { background: #16242f; color: #7cc0f7; }
+  body.app .notice { background: #12212e; color: #cfe3f5; }
+}

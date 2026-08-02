@@ -148,6 +148,18 @@ env_has WEBUI_SECRET || env_add WEBUI_SECRET \
 env_has PUID || env_add PUID "$(id -u)"
 env_has PGID || env_add PGID "$(id -g)"
 
+# The container sees only its bridge network, so it cannot tell which subnets
+# are directly attached. Detect them here for SCAN_TYPE=auto. Refreshed every
+# run, since an appliance moved to a new site lands on a different subnet.
+SUBNETS="$(ip -4 -o route show scope link 2>/dev/null \
+    | grep -vE ' dev (docker|br-|veth)' \
+    | awk '{print $1}' | grep -E '^[0-9]+\.' | paste -sd, - || true)"
+sed -i '/^HOST_SUBNETS=/d' .env
+if [ -n "$SUBNETS" ]; then
+    env_add HOST_SUBNETS "$SUBNETS"
+    say "subnets:   $SUBNETS treated as directly attached"
+fi
+
 # The container cannot see the host's LAN address, so the certificate can only
 # match the URL you actually browse to if we detect and pass it in.
 if env_has TLS_SAN && [ -n "$(grep -E '^TLS_SAN=' .env | cut -d= -f2-)" ]; then
@@ -167,6 +179,20 @@ else
 fi
 
 # --------------------------------------------------------------- build/run
+
+# Point the update check at whichever repository this checkout came from.
+# Hardcoding one means a clone of the other always reports an update.
+ORIGIN="$(git config --get remote.origin.url 2>/dev/null || echo '')"
+SLUG="$(printf '%s' "$ORIGIN" | sed -E -e 's#\.git$##' -e 's#.*[:/]([^/]+/[^/]+)$#\1#')"
+sed -i '/^UPDATE_CHECK_URL=/d' .env
+if printf '%s' "$SLUG" | grep -qE '^[^/]+/[^/]+$'; then
+    env_add UPDATE_CHECK_URL "https://api.github.com/repos/${SLUG}/commits/main"
+fi
+
+# Stamp the build so the UI can compare against the repository.
+sed -i -e '/^BUILD_REF=/d' -e '/^BUILD_DATE=/d' .env
+env_add BUILD_REF  "$(git rev-parse --short HEAD 2>/dev/null || echo '')"
+env_add BUILD_DATE "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 head_ "Building the image"
 say "First build pulls the tools and ~13k nuclei templates; expect a few minutes."

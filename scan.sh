@@ -10,6 +10,13 @@ NAABU_PORTS="${NAABU_PORTS:-}"
 NAABU_RATE="${NAABU_RATE:-1000}"
 NAABU_CONCURRENCY="${NAABU_CONCURRENCY:-25}"
 
+# Used only when SCAN_TYPE=auto. HOST_SUBNETS is written by setup.sh from the
+# host's directly-attached routes, because the container behind a bridge cannot
+# see them itself.
+HOST_SUBNETS="${HOST_SUBNETS:-}"
+NAABU_RATE_LOCAL="${NAABU_RATE_LOCAL:-2000}"
+NAABU_RATE_ROUTED="${NAABU_RATE_ROUTED:-300}"
+
 NMAP_ARGS="${NMAP_ARGS:--sV -Pn -T3}"
 
 NUCLEI_SEVERITY="${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
@@ -50,6 +57,25 @@ fi
 [ -s "$RESOLVED_TARGETS" ] || die "Target list resolved to zero entries."
 
 log "run directory: $RUN_DIR"
+
+# ------------------------------------------------- scan type and rate (auto)
+#
+# SYN scanning is fast but leaves half-open connections that a stateful
+# firewall records and eventually blocks. That only matters when something sits
+# between us and the target, so pick per run.
+
+if [ "$SCAN_TYPE" = "auto" ]; then
+    LOCALITY="$(python3 /usr/local/bin/locality.py "$HOST_SUBNETS" "$RESOLVED_TARGETS" 2>/dev/null || echo routed)"
+    if [ "$LOCALITY" = "local" ]; then
+        SCAN_TYPE="s"
+        NAABU_RATE="$NAABU_RATE_LOCAL"
+        log "auto: every target is on a directly attached subnet, using SYN at ${NAABU_RATE}/s"
+    else
+        SCAN_TYPE="c"
+        NAABU_RATE="$NAABU_RATE_ROUTED"
+        log "auto: at least one target is routed, using connect scan at ${NAABU_RATE}/s"
+    fi
+fi
 
 # ---------------------------------------------------------------- naabu
 

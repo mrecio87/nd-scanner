@@ -6,12 +6,34 @@
 <p class="lede">Enter the networks you are authorised to assess. One address or range per line.</p>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
+{% if flash %}<div class="notice">{{ flash }}</div>{% endif %}
+{% if tpl_message %}<div class="notice">{{ tpl_message }}</div>{% endif %}
+<div class="notice" id="update-notice" style="display:none">
+  <strong>An update is available.</strong>
+  <a href="#" id="update-how">How to update</a>
+  <div id="update-steps" style="display:none; margin-top:10px">
+    Updating rebuilds the container, so do it between engagements rather than
+    mid-scan. On the appliance:
+    <pre class="log" style="margin-top:8px">cd ~/nd-scanner
+git pull
+./setup.sh</pre>
+    Your password, certificate, and stored results are preserved.
+  </div>
+</div>
 
 <div class="card">
   <form method="post" action="{{ url_for('scan') }}">
     <div class="field">
       <label for="targets">Target networks</label>
       <div class="hint">Hostnames, single IPs, or CIDR ranges, e.g. <span class="mono">192.168.1.0/24</span></div>
+      {% if host_subnets %}
+      <div class="chips">
+        <span class="chips-label">This appliance is on:</span>
+        {% for net in host_subnets %}
+        <button type="button" class="chip" data-net="{{ net }}">{{ net }}</button>
+        {% endfor %}
+      </div>
+      {% endif %}
       <textarea id="targets" name="targets" autofocus
                 placeholder="192.168.1.0/24&#10;10.0.0.5&#10;server.client.local"></textarea>
     </div>
@@ -32,6 +54,11 @@
       </div>
     </div>
 
+    <label class="confirm">
+      <input type="checkbox" name="authorised" required>
+      I have written authorisation to scan these networks.
+    </label>
+
     <button class="btn" type="submit">Start scan</button>
   </form>
 </div>
@@ -49,6 +76,7 @@
         {% if s.state == "running" %}<span class="spinner"></span> Running
         {% elif s.state == "failed" %}Failed
         {% elif s.state == "interrupted" %}Interrupted
+        {% elif s.state == "cancelled" %}Stopped
         {% else %}Complete{% endif %}
       </td>
       <td>{{ s.findings }}</td>
@@ -66,4 +94,67 @@
   <p class="empty">No scans yet.</p>
   {% endif %}
 </div>
+
+<h2>Appliance</h2>
+<div class="card">
+  <table>
+    <tr>
+      <td>Vulnerability templates</td>
+      <td class="mono">{{ template_count }}</td>
+      <td style="text-align:right">
+        <form method="post" action="{{ url_for('templates_update') }}" style="margin:0">
+          <button class="btn btn-secondary" type="submit">Update templates</button>
+        </form>
+      </td>
+    </tr>
+    <tr>
+      <td>Version</td>
+      <td class="mono">{{ build_ref or "unstamped" }}{% if build_date %} · {{ build_date[:10] }}{% endif %}</td>
+      <td style="text-align:right"><span class="hint" id="update-status">checking…</span></td>
+    </tr>
+    <tr>
+      <td>Stored results</td>
+      <td class="hint">Client scan data stays on this appliance until deleted.</td>
+      <td style="text-align:right">
+        <form method="post" action="{{ url_for('purge') }}" style="margin:0"
+              onsubmit="return confirm('Delete all stored scan results? This cannot be undone.');">
+          <button class="btn btn-secondary" type="submit">Delete all results</button>
+        </form>
+      </td>
+    </tr>
+  </table>
+</div>
+
+<script>
+document.querySelectorAll('.chip').forEach(function (b) {
+  b.addEventListener('click', function () {
+    var ta = document.getElementById('targets');
+    var net = b.dataset.net;
+    var lines = ta.value.split('\n').map(function (l) { return l.trim(); }).filter(Boolean);
+    if (lines.indexOf(net) === -1) lines.push(net);
+    ta.value = lines.join('\n') + '\n';
+    ta.focus();
+  });
+});
+
+fetch({{ url_for('update_check')|tojson }})
+  .then(function (r) { return r.json(); })
+  .then(function (d) {
+    var el = document.getElementById('update-status');
+    if (!d.known) { el.textContent = d.reason || 'version unknown'; return; }
+    if (d.update_available) {
+      el.textContent = 'update available (' + d.latest + ')';
+      document.getElementById('update-notice').style.display = 'block';
+    } else {
+      el.textContent = 'up to date';
+    }
+  })
+  .catch(function () { document.getElementById('update-status').textContent = 'could not check'; });
+
+document.getElementById('update-how').addEventListener('click', function (e) {
+  e.preventDefault();
+  var s = document.getElementById('update-steps');
+  s.style.display = (s.style.display === 'none') ? 'block' : 'none';
+});
+</script>
 {% endblock %}

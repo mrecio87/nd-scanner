@@ -24,6 +24,9 @@ services:
       NAABU_TOP_PORTS: "${NAABU_TOP_PORTS:-1000}"
       NAABU_PORTS: "${NAABU_PORTS:-}"
       NAABU_RATE: "${NAABU_RATE:-1000}"
+      HOST_SUBNETS: "${HOST_SUBNETS:-}"
+      NAABU_RATE_LOCAL: "${NAABU_RATE_LOCAL:-2000}"
+      NAABU_RATE_ROUTED: "${NAABU_RATE_ROUTED:-300}"
       NAABU_CONCURRENCY: "${NAABU_CONCURRENCY:-25}"
       NMAP_ARGS: "${NMAP_ARGS:--sV -Pn -T3}"
       NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
@@ -51,9 +54,16 @@ services:
   web:
     build:
       context: .
+      args:
+        BUILD_REF: "${BUILD_REF:-}"
+        BUILD_DATE: "${BUILD_DATE:-}"
     image: nd-scanner:latest
     container_name: nd-scanner-web
     entrypoint: ["python3", "/opt/webui/app.py"]
+
+    # Reap orphaned scanner processes. Without an init, PID 1 is the Flask
+    # app, which never adopts them, so every stopped scan leaves a zombie.
+    init: true
 
     cap_add:
       - NET_RAW
@@ -90,6 +100,12 @@ services:
       NAABU_TOP_PORTS: "${NAABU_TOP_PORTS:-1000}"
       NAABU_PORTS: "${NAABU_PORTS:-}"
       NAABU_RATE: "${NAABU_RATE:-1000}"
+      HOST_SUBNETS: "${HOST_SUBNETS:-}"
+      BUILD_REF: "${BUILD_REF:-}"
+      BUILD_DATE: "${BUILD_DATE:-}"
+      UPDATE_CHECK_URL: "${UPDATE_CHECK_URL:-}"
+      NAABU_RATE_LOCAL: "${NAABU_RATE_LOCAL:-2000}"
+      NAABU_RATE_ROUTED: "${NAABU_RATE_ROUTED:-300}"
       NAABU_CONCURRENCY: "${NAABU_CONCURRENCY:-25}"
       NMAP_ARGS: "${NMAP_ARGS:--sV -Pn -T3}"
       NUCLEI_SEVERITY: "${NUCLEI_SEVERITY:-info,low,medium,high,critical}"
@@ -97,6 +113,17 @@ services:
       NUCLEI_RATE: "${NUCLEI_RATE:-150}"
       NUCLEI_CONCURRENCY: "${NUCLEI_CONCURRENCY:-25}"
       NUCLEI_UPDATE: "${NUCLEI_UPDATE:-false}"
+
+    # Connect scanning needs a socket per probe. The stock 1024 descriptors and
+    # a 60s TIME_WAIT cap sustained throughput at roughly 470/s regardless of
+    # the configured rate, and exhausted probes look like filtered hosts.
+    ulimits:
+      nofile:
+        soft: 65535
+        hard: 65535
+    sysctls:
+      net.ipv4.ip_local_port_range: "10000 65000"
+      net.ipv4.tcp_fin_timeout: "15"
 
     deploy:
       resources:

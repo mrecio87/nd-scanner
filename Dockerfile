@@ -43,9 +43,15 @@ ENV HOME=/root
 RUN nuclei -update-templates -silent || nuclei -update-templates || true
 
 COPY scan.sh /usr/local/bin/scan.sh
-RUN chmod +x /usr/local/bin/scan.sh
+COPY locality.py /usr/local/bin/locality.py
+RUN chmod +x /usr/local/bin/scan.sh /usr/local/bin/locality.py
 
 COPY webui /opt/webui
+
+# Stamped by setup.sh so the UI can tell you when the repo has moved on.
+ARG BUILD_REF=""
+ARG BUILD_DATE=""
+ENV BUILD_REF=$BUILD_REF BUILD_DATE=$BUILD_DATE
 
 VOLUME ["/output", "/targets"]
 

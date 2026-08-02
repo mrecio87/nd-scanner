@@ -19,8 +19,23 @@
 </div>
 
 {# ------------------------------------------------------- executive verdict #}
+{% if r.degraded %}
+<div class="error" style="margin-bottom:20px">
+  <strong>This scan did not complete successfully.</strong>
+  {{ r.unreachable }}% of the checks could not reach their target, so the results
+  below are incomplete. A firewall or access control was most likely blocking the
+  scanner. Do not read the absence of findings as evidence that these systems are
+  secure. Re-run the scan once the scanner has unobstructed access.
+</div>
+{% endif %}
+
 <div class="verdict">
-  {% if r.highest == "critical" %}
+  {% if r.degraded %}
+    <strong>Incomplete assessment.</strong>
+    Enough of this scan was blocked that no conclusion can be drawn about the
+    security of the systems in scope. What follows is a partial record of what
+    the scanner managed to reach.
+  {% elif r.highest == "critical" %}
     <strong>Immediate action required.</strong>
     The assessment identified critical weaknesses that an attacker could use to take
     control of affected systems. These should be addressed before anything else.

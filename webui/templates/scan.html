@@ -11,6 +11,11 @@
     <div class="step" data-stage="2"><span class="dot">2</span> Identifying services</div>
     <div class="step" data-stage="3"><span class="dot">3</span> Checking for vulnerabilities</div>
   </div>
+  <form method="post" action="{{ url_for('stop_scan', run_id=run_id) }}"
+        id="stop-form" style="margin-top:20px"
+        onsubmit="return confirm('Stop this scan? Partial results are kept.');">
+    <button class="btn btn-secondary" type="submit">Stop scan</button>
+  </form>
   <div id="actions" style="margin-top:20px; display:none">
     <a class="btn" id="report-link" href="{{ url_for('report', run_id=run_id) }}">View report</a>
   </div>
@@ -87,16 +92,24 @@
 
         if (d.state !== 'running' && !done) {
           done = true;
-          var bad = (d.state === 'failed' || d.state === 'interrupted');
+          var bad = (d.state === 'failed' || d.state === 'interrupted' ||
+                     d.state === 'cancelled');
           document.getElementById('sub').textContent =
+            d.state === 'cancelled'   ? 'Scan stopped.' :
             d.state === 'interrupted' ? 'Scan interrupted.' :
             d.state === 'failed'      ? 'Scan failed.' : 'Scan complete.';
+          if (d.state === 'cancelled') {
+            document.getElementById('failed-msg').textContent =
+              'You stopped this scan. Whatever had been discovered up to that ' +
+              'point is kept, but the run is incomplete.';
+          }
           if (d.state === 'interrupted') {
             document.getElementById('failed-msg').textContent =
               'The appliance restarted while this scan was running, so it did ' +
               'not finish. Partial results are kept, but re-run the scan for a ' +
               'complete picture.';
           }
+          document.getElementById('stop-form').style.display = 'none';
           document.getElementById(bad ? 'failed' : 'actions').style.display = 'block';
           return;
         }
