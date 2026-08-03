@@ -4,6 +4,7 @@
    text uses the darker step of the same hue (#12609c, 6.61:1). */
 
 :root {
+  color-scheme: light;
   --brand:        #2ea3f2;
   --brand-deep:   #12609c;
   --brand-dark:   #0b4a78;
@@ -328,28 +329,78 @@ pre.log {
 .login-card { background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius); padding: 30px; }
 .login-mark { text-align: center; margin-bottom: 18px; }
 
-/* Operator-facing chrome follows the OS theme; the client report is
-   intentionally light in every mode, because it is a document that must look
-   identical on screen and on paper. */
-@media (prefers-color-scheme: dark) {
-  body.app {
-    --page: #10151b; --surface: #171d25; --ink: #f2f5f8; --ink-2: #b9c2cd;
-    --rule: #28313c; --brand-deep: #7cc0f7;
-  }
-  body.app textarea, body.app input, body.app select {
-    background: #10151b; color: #f2f5f8; border-color: #33404e;
-  }
-  body.app .badge, body.app .asset, body.app .host-sev-chip { background: #1e2732; }
-  /* #eef5fd is a light-mode-only fill; left as-is it puts the dark-mode
-     brand-deep text (#7cc0f7) at 1.78:1, effectively invisible. */
-  body.app .os-badge { background: #16242f; }
-  body.app .error { background: #2a1618; color: #ffb4b4; }
-  body.app .chart-track { background: #232d39; }
-  body.app .remediation { background: #142230; }
-  body.app .tile, body.app .card, body.app .finding { background: var(--surface); }
+/* Dark mode: gated on the resolved data-theme attribute (see base.html's
+   inline head script), not on prefers-color-scheme directly. That lets a
+   manual Light/Dark/Auto choice override the OS setting, and it applies to
+   every page uniformly -- previously body.app scoped this to the operator UI
+   only, so a client report could never be viewed in dark on screen. Printing
+   still forces light regardless (see @media print below); this only affects
+   how a report looks while it is being read on a screen. */
+html[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #10151b; --surface: #171d25; --ink: #f2f5f8; --ink-2: #b9c2cd;
+  --rule: #28313c; --brand-deep: #7cc0f7;
+}
+html[data-theme="dark"] textarea,
+html[data-theme="dark"] input,
+html[data-theme="dark"] select {
+  background: #10151b; color: #f2f5f8; border-color: #33404e;
+}
+html[data-theme="dark"] .badge,
+html[data-theme="dark"] .asset,
+html[data-theme="dark"] .host-sev-chip { background: #1e2732; }
+/* #eef5fd is a light-only fill; left as-is it puts the dark-mode brand-deep
+   text (#7cc0f7) at 1.78:1, effectively invisible. */
+html[data-theme="dark"] .os-badge { background: #16242f; }
+html[data-theme="dark"] .error { background: #2a1618; color: #ffb4b4; }
+html[data-theme="dark"] .chart-track { background: #232d39; }
+html[data-theme="dark"] .remediation { background: #142230; }
+html[data-theme="dark"] .tile,
+html[data-theme="dark"] .card,
+html[data-theme="dark"] .finding { background: var(--surface); }
+html[data-theme="dark"] .bulk-bar { background: #12212e; color: #cfe3f5; }
+html[data-theme="dark"] .chip { background: #16242f; color: #7cc0f7; }
+html[data-theme="dark"] .notice { background: #12212e; color: #cfe3f5; }
+
+.theme-toggle {
+  display: flex; align-items: center; gap: 2px;
+  background: var(--page); border: 1px solid var(--rule); border-radius: 999px;
+  padding: 2px; margin-left: 4px;
+}
+.theme-toggle button {
+  display: flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: none; border-radius: 999px;
+  background: transparent; color: var(--ink-2); cursor: pointer; padding: 0;
+}
+.theme-toggle button:hover { color: var(--ink); }
+.theme-toggle button.active {
+  background: var(--surface); color: var(--brand-deep);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, .12);
 }
 
 @media print {
+  /* A report handed to a client must print the same regardless of whatever
+     theme the operator happened to be viewing it in on screen. html[data-
+     theme="dark"] has higher specificity than a plain :root (the type
+     selector breaks what would otherwise be a tie), so it would still win
+     here without !important even though this rule is what should apply
+     while printing -- media conditions do not affect specificity. */
+  :root {
+    color-scheme: light !important;
+    --page: #ffffff !important; --surface: #ffffff !important;
+    --ink: #0b0b0b !important; --ink-2: #52514e !important;
+    --rule: #e1e0d9 !important; --brand-deep: #12609c !important;
+  }
+  /* These set their own fill rather than reading the variables above, so
+     resetting the variables does not reach them; without this a report
+     printed while dark mode was active on screen keeps dark chips, badges
+     and callout boxes. */
+  .error { background: #fdecec !important; color: #7f1d1d !important; }
+  .badge, .asset, .host-sev-chip { background: #f4f6f9 !important; }
+  .os-badge { background: #eef5fd !important; }
+  .chart-track { background: #eef2f7 !important; }
+  .remediation { background: #f2f8fe !important; }
+
   body { background: #fff; font-size: 11.5pt; }
   .topbar nav, .no-print { display: none !important; }
   /* Sticky would otherwise repeat the header at the top of every printed
@@ -400,13 +451,4 @@ pre.log {
 }
 .bulk-bar .btn, .bulk-bar .btn-secondary { padding: 6px 14px; font-size: 13px; }
 table input[type=checkbox] { width: auto; margin: 0; vertical-align: middle; }
-
-@media (prefers-color-scheme: dark) {
-  body.app .bulk-bar { background: #12212e; color: #cfe3f5; }
-}
 .confirm input { width: auto; }
-
-@media (prefers-color-scheme: dark) {
-  body.app .chip { background: #16242f; color: #7cc0f7; }
-  body.app .notice { background: #12212e; color: #cfe3f5; }
-}
