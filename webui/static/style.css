@@ -40,7 +40,11 @@ body {
 
 a { color: var(--brand-deep); }
 
-.wrap { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+/* Scales with the window instead of sitting at a fixed 1060px -- that left
+   several hundred px of unused space on either side on an ordinary laptop
+   screen with the browser maximised. Still caps out on very wide monitors
+   so lines of text do not run edge to edge. */
+.wrap { width: min(94vw, 1440px); margin: 0 auto; padding: 0 20px; }
 
 /* ---------------------------------------------------------------- header */
 
@@ -352,7 +356,9 @@ pre.log {
      page; the report is meant to read as one flowing document on paper. */
   .topbar { position: static; }
   .card, .finding, .tile { border-color: #ccc; break-inside: avoid; }
-  .wrap { max-width: none; padding: 0; }
+  /* width, not max-width, is what constrains .wrap now -- reset that, not
+     the now-unused max-width, or print keeps the on-screen 94vw/1440px cap. */
+  .wrap { width: auto; padding: 0; }
   a { color: #000; text-decoration: none; }
 }
 
