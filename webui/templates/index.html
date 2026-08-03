@@ -35,21 +35,21 @@ git pull
       </div>
       {% endif %}
       <textarea id="targets" name="targets" autofocus
-                placeholder="192.168.1.0/24&#10;10.0.0.5&#10;server.client.local"></textarea>
+                placeholder="192.168.1.0/24&#10;10.0.0.5&#10;server.client.local">{{ prefill_targets or '' }}</textarea>
     </div>
 
     <div class="row">
       <div class="field">
         <label for="client">Client name <span class="hint" style="display:inline">(appears on the report)</span></label>
-        <input type="text" id="client" name="client" placeholder="Acme Manufacturing">
+        <input type="text" id="client" name="client" placeholder="Acme Manufacturing" value="{{ prefill_client or '' }}">
       </div>
       <div class="field">
         <label for="profile">Scan profile</label>
         <select id="profile" name="profile">
-          <option value="standard">Standard: top 1000 ports, full checks</option>
-          <option value="quick">Quick look: top 100 ports, no vulnerability checks</option>
-          <option value="gentle">Gentle: slow rate for fragile or production networks</option>
-          <option value="thorough">Thorough: all 65535 ports (slow)</option>
+          <option value="standard" {% if prefill_profile == "standard" %}selected{% endif %}>Standard: top 1000 ports, full checks</option>
+          <option value="quick" {% if prefill_profile == "quick" %}selected{% endif %}>Quick look: top 100 ports, no vulnerability checks</option>
+          <option value="gentle" {% if prefill_profile == "gentle" %}selected{% endif %}>Gentle: slow rate for fragile or production networks</option>
+          <option value="thorough" {% if prefill_profile == "thorough" %}selected{% endif %}>Thorough: all 65535 ports (slow)</option>
         </select>
       </div>
     </div>
@@ -66,30 +66,43 @@ git pull
 <h2>Previous scans</h2>
 <div class="card">
   {% if scans %}
-  <table>
-    <tr><th>Started</th><th>Client</th><th>Status</th><th>Findings</th><th></th></tr>
-    {% for s in scans %}
-    <tr>
-      <td class="mono">{{ s.started[:16].replace("T", " ") or s.run_id }}</td>
-      <td>{{ s.client or "-" }}</td>
-      <td>
-        {% if s.state == "running" %}<span class="spinner"></span> Running
-        {% elif s.state == "failed" %}Failed
-        {% elif s.state == "interrupted" %}Interrupted
-        {% elif s.state == "cancelled" %}Stopped
-        {% else %}Complete{% endif %}
-      </td>
-      <td>{{ s.findings }}</td>
-      <td>
-        {% if s.state == "running" %}
-          <a href="{{ url_for('scan_view', run_id=s.run_id) }}">Watch</a>
-        {% else %}
-          <a href="{{ url_for('report', run_id=s.run_id) }}">View report</a>
-        {% endif %}
-      </td>
-    </tr>
-    {% endfor %}
-  </table>
+  <form method="post" id="bulk-form">
+    <div class="bulk-bar no-print" id="bulk-bar" style="display:none">
+      <span id="bulk-count"></span>
+      <button type="submit" formaction="{{ url_for('reports_export') }}" class="btn btn-secondary">Export selected</button>
+      <button type="submit" formaction="{{ url_for('reports_delete') }}" class="btn btn-secondary"
+              onclick="return confirm('Delete the selected scan results? This cannot be undone.');">Delete selected</button>
+    </div>
+    <table>
+      <tr>
+        <th style="width:24px"><input type="checkbox" id="select-all"></th>
+        <th>Started</th><th>Client</th><th>Status</th><th>Findings</th><th class="no-print"></th>
+      </tr>
+      {% for s in scans %}
+      <tr>
+        <td><input type="checkbox" name="run_ids" value="{{ s.run_id }}" class="row-check"></td>
+        <td class="mono">{{ s.started[:16].replace("T", " ") or s.run_id }}</td>
+        <td>{{ s.client or "-" }}</td>
+        <td>
+          {% if s.state == "running" %}<span class="spinner"></span> Running
+          {% elif s.state == "failed" %}Failed
+          {% elif s.state == "interrupted" %}Interrupted
+          {% elif s.state == "cancelled" %}Stopped
+          {% else %}Complete{% endif %}
+        </td>
+        <td>{{ s.findings }}</td>
+        <td class="no-print" style="white-space:nowrap">
+          {% if s.state == "running" %}
+            <a href="{{ url_for('scan_view', run_id=s.run_id) }}">Watch</a>
+          {% else %}
+            <a href="{{ url_for('report', run_id=s.run_id) }}">View report</a>
+          {% endif %}
+          &middot; <a href="{{ url_for('rescan', run_id=s.run_id) }}">Rescan</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </table>
+  </form>
   {% else %}
   <p class="empty">No scans yet.</p>
   {% endif %}
@@ -126,6 +139,28 @@ git pull
 </div>
 
 <script>
+(function () {
+  var selectAll = document.getElementById('select-all');
+  var rowChecks = document.querySelectorAll('.row-check');
+  var bulkBar = document.getElementById('bulk-bar');
+  var bulkCount = document.getElementById('bulk-count');
+  if (!selectAll || !rowChecks.length) return;
+
+  function refresh() {
+    var n = document.querySelectorAll('.row-check:checked').length;
+    bulkBar.style.display = n ? 'flex' : 'none';
+    bulkCount.textContent = n + ' selected';
+    selectAll.indeterminate = n > 0 && n < rowChecks.length;
+    selectAll.checked = n === rowChecks.length;
+  }
+
+  selectAll.addEventListener('change', function () {
+    rowChecks.forEach(function (c) { c.checked = selectAll.checked; });
+    refresh();
+  });
+  rowChecks.forEach(function (c) { c.addEventListener('change', refresh); });
+})();
+
 document.querySelectorAll('.chip').forEach(function (b) {
   b.addEventListener('click', function () {
     var ta = document.getElementById('targets');

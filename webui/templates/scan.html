@@ -29,7 +29,7 @@
   <div class="tile"><div class="n" id="s-hosts">0</div><div class="k">Systems found</div></div>
   <div class="tile"><div class="n" id="s-ports">0</div><div class="k">Open ports</div></div>
   <div class="tile"><div class="n" id="s-services">0</div><div class="k">Services identified</div></div>
-  <div class="tile"><div class="n" id="s-findings">0</div><div class="k">Findings</div></div>
+  <div class="tile"><div class="n" id="s-findings">0</div><div class="k">Vulnerabilities</div></div>
   <div class="tile"><div class="n" id="s-elapsed">0:00</div><div class="k">Elapsed</div></div>
 </div>
 
@@ -73,7 +73,6 @@
     pinned = (logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight) < 32;
   });
 
-  var findingsPanel = document.getElementById('findings-panel');
   var findingsBody = document.getElementById('findings-body');
   var findingsCount = document.getElementById('findings-count');
 
@@ -84,8 +83,17 @@
     return e;
   }
 
+  var lastFindingsTotal = -1;
+
   function renderFindings(d) {
     findingsCount.textContent = d.total;
+    // The count above always reflects the latest fetch, but rebuilding the
+    // card list is skipped once nothing has changed -- otherwise a reader
+    // with the panel open loses their scroll position and selection every
+    // 2.5s even when no new finding actually appeared.
+    if (d.total === lastFindingsTotal) return;
+    lastFindingsTotal = d.total;
+
     findingsBody.innerHTML = '';
     if (!d.findings.length) {
       findingsBody.appendChild(el('p', 'empty', 'No findings yet.'));
@@ -127,9 +135,10 @@
       .catch(function () {});
   }
 
-  findingsPanel.addEventListener('toggle', function () {
-    if (findingsPanel.open) loadFindings();
-  });
+  // No open-gate: the summary count needs to update whether or not the panel
+  // is expanded, the same as every other live figure on this page. Skipping
+  // the fetch while collapsed was a premature optimisation -- it left the
+  // count frozen at 0 until the reader thought to click it open.
 
   function setText(id, v) { document.getElementById(id).textContent = v; }
 
@@ -156,7 +165,7 @@
         setText('s-hosts', d.hosts);
         setText('s-ports', d.ports);
         setText('s-services', d.services);
-        setText('s-findings', d.findings);
+        setText('s-findings', d.vulnerabilities);
         setText('s-elapsed', elapsed(d.started));
 
         // Reflect the current answer every poll, not just the first time it
@@ -171,7 +180,7 @@
           document.getElementById('degraded').style.display = 'none';
         }
 
-        if (findingsPanel.open) loadFindings();
+        loadFindings();
 
         logEl.textContent = d.log || 'Waiting for output…';
         if (pinned) logEl.scrollTop = logEl.scrollHeight;

@@ -48,6 +48,9 @@ a { color: var(--brand-deep); }
   background: var(--surface);
   border-bottom: 3px solid var(--brand);
   padding: 14px 0;
+  position: sticky;
+  top: 0;
+  z-index: 10;
 }
 .topbar .wrap { display: flex; align-items: center; gap: 14px; }
 
@@ -231,6 +234,19 @@ tr:last-child td { border-bottom: none; }
 }
 .sev-group-note { color: var(--ink-2); font-size: 13.5px; margin: 0 0 12px; font-weight: 400; }
 
+.host-head-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.host-sev-summary { display: flex; gap: 6px; flex-wrap: wrap; }
+.host-sev-chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--ink-2);
+  background: #f4f6f9; border: 1px solid var(--rule);
+  padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+}
+.host-vulns { margin: 2px 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.host-vuln-row { display: flex; align-items: center; gap: 10px; font-size: 13.5px; }
+.host-vuln-name { color: var(--ink); }
+.host-clean { margin: 2px 0 14px; }
+
 /* ---------------------------------------------------------------- status */
 
 .steps { display: flex; flex-direction: column; gap: 10px; margin: 4px 0 0; }
@@ -319,7 +335,10 @@ pre.log {
   body.app textarea, body.app input, body.app select {
     background: #10151b; color: #f2f5f8; border-color: #33404e;
   }
-  body.app .badge, body.app .asset { background: #1e2732; }
+  body.app .badge, body.app .asset, body.app .host-sev-chip { background: #1e2732; }
+  /* #eef5fd is a light-mode-only fill; left as-is it puts the dark-mode
+     brand-deep text (#7cc0f7) at 1.78:1, effectively invisible. */
+  body.app .os-badge { background: #16242f; }
   body.app .error { background: #2a1618; color: #ffb4b4; }
   body.app .chart-track { background: #232d39; }
   body.app .remediation { background: #142230; }
@@ -329,6 +348,9 @@ pre.log {
 @media print {
   body { background: #fff; font-size: 11.5pt; }
   .topbar nav, .no-print { display: none !important; }
+  /* Sticky would otherwise repeat the header at the top of every printed
+     page; the report is meant to read as one flowing document on paper. */
+  .topbar { position: static; }
   .card, .finding, .tile { border-color: #ccc; break-inside: avoid; }
   .wrap { max-width: none; padding: 0; }
   a { color: #000; text-decoration: none; }
@@ -362,6 +384,19 @@ pre.log {
 .confirm {
   display: flex; align-items: center; gap: 9px;
   font-weight: 400; font-size: 14px; margin-bottom: 18px;
+}
+
+.bulk-bar {
+  display: flex; align-items: center; gap: 12px;
+  background: #eef5fd; border: 1px solid var(--brand);
+  border-radius: 8px; padding: 9px 14px; margin-bottom: 12px;
+  font-size: 13.5px; color: var(--brand-deep); font-weight: 600;
+}
+.bulk-bar .btn, .bulk-bar .btn-secondary { padding: 6px 14px; font-size: 13px; }
+table input[type=checkbox] { width: auto; margin: 0; vertical-align: middle; }
+
+@media (prefers-color-scheme: dark) {
+  body.app .bulk-bar { background: #12212e; color: #cfe3f5; }
 }
 .confirm input { width: auto; }
 

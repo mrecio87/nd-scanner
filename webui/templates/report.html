@@ -131,8 +131,33 @@
         <span class="mono host-ip">{{ ip }}</span>
         {% if host.hostname %}<span class="host-hostname">{{ host.hostname }}</span>{% endif %}
       </div>
-      {% if host.os %}<span class="badge os-badge">{{ host.os }}</span>{% endif %}
+      <div class="host-head-right">
+        {% if host.findings %}
+        <div class="host-sev-summary">
+          {% for s in sev_order %}
+            {% if host.sev_counts[s] %}
+            <span class="host-sev-chip"><span class="sev-dot s-{{ s }}"></span>{{ host.sev_counts[s] }} {{ sev_label[s] }}</span>
+            {% endif %}
+          {% endfor %}
+        </div>
+        {% endif %}
+        {% if host.os %}<span class="badge os-badge">{{ host.os }}</span>{% endif %}
+      </div>
     </div>
+
+    {% if host.findings %}
+    <div class="host-vulns">
+      {% for f in host.findings %}
+      <div class="host-vuln-row">
+        <span class="badge"><span class="sev-dot s-{{ f.severity }}"></span>{{ sev_label[f.severity] }}</span>
+        <span class="host-vuln-name">{{ f.name }}</span>
+      </div>
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="hint host-clean">No issues found on this system.</p>
+    {% endif %}
+
     <table>
       <tr><th>Port</th><th>Service</th><th>Software detected</th></tr>
       {% for p in host.ports %}

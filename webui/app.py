@@ -4,6 +4,7 @@
 Kept small: the appliance's whole reason for existing is a low resource
 footprint, so this is Flask + the standard library and nothing else.
 """
+import io
 import json
 import os
 import re
@@ -17,6 +18,7 @@ import time
 import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -268,10 +270,12 @@ def scan_progress(run_dir):
     nmap_dir = run_dir / "nmap"
     services = len(list(nmap_dir.glob("*.xml"))) if nmap_dir.is_dir() else 0
 
-    findings = 0
-    nj = run_dir / "nuclei.jsonl"
-    if nj.exists():
-        findings = sum(1 for l in nj.read_text(errors="replace").splitlines() if l.strip())
+    # Grouped by template like parse_findings(), but severity "info" is
+    # inventory (what's running), not a vulnerability, so it is excluded here
+    # -- same definition as the finished report's "Issues to address" tile.
+    # The findings dropdown intentionally keeps every severity; this is a
+    # narrower, actionable-only count for a quick glance while a scan runs.
+    vulnerabilities = sum(1 for f in parse_findings(run_dir) if f["severity"] != "info")
 
     vanished, checked = count_vanished_ports(run_dir)
     # A scan being blocked mid-run looks identical to a clean result unless
@@ -287,7 +291,7 @@ def scan_progress(run_dir):
         "hosts": len(hosts),
         "ports": ports,
         "services": services,
-        "findings": findings,
+        "vulnerabilities": vulnerabilities,
         "unreachable": unreachable,
         "degraded": checked >= 5 and unreachable >= 20,
     }
@@ -514,18 +518,67 @@ def parse_findings(run_dir):
             "remediation": (info.get("remediation") or "").strip(),
             "tags": info.get("tags") or [],
             "assets": set(),
+            "ips": set(),
         })
         asset = d.get("matched-at") or d.get("host") or ""
         if asset:
             g["assets"].add(asset)
+        # Kept separate from "assets": matched-at is a display string (a full
+        # URL, often), not reliably an IP to key host lookups against, but
+        # nuclei's own "ip" field always is.
+        ip = d.get("ip") or d.get("host") or ""
+        if ip:
+            g["ips"].add(ip)
 
     out = []
     for g in groups.values():
         g["assets"] = sorted(g["assets"])
+        g["ips"] = sorted(g["ips"])
         out.append(g)
     out.sort(key=lambda g: (SEVERITY_ORDER.index(g["severity"]), -len(g["assets"]),
                             g["name"].lower()))
     return out
+
+
+def ip_sort_key(ip):
+    """Numeric, not lexicographic: string-sorting IPs puts 10.1.20.100 before
+    10.1.20.36 before 10.1.20.9, which is not the order a reader expects."""
+    try:
+        return tuple(int(part) for part in ip.split("."))
+    except ValueError:
+        return (999, 999, 999, 999)
+
+
+def attach_host_findings(hosts, findings):
+    """Each host's own vulnerabilities, condensed to name + severity.
+
+    Full description and remediation stay in the severity-grouped section --
+    repeating them per host would blow up a report where one issue affects
+    many machines. This is a pointer back to that detail, scoped to one
+    system, for whoever is responsible for just that box.
+    """
+    for h in hosts.values():
+        h["findings"] = []
+        h["sev_counts"] = {s: 0 for s in SEVERITY_ORDER}
+
+    for f in findings:
+        for ip in f["ips"]:
+            h = hosts.get(ip)
+            if h is None:
+                continue
+            h["findings"].append({"name": f["name"], "severity": f["severity"]})
+            h["sev_counts"][f["severity"]] += 1
+
+    for h in hosts.values():
+        h["findings"].sort(key=lambda x: SEVERITY_ORDER.index(x["severity"]))
+
+    def risk_key(item):
+        ip, h = item
+        worst = (min(SEVERITY_ORDER.index(x["severity"]) for x in h["findings"])
+                if h["findings"] else len(SEVERITY_ORDER))
+        return (worst, -len(h["findings"]), ip_sort_key(ip))
+
+    return dict(sorted(hosts.items(), key=risk_key))
 
 
 def build_report(run_id):
@@ -533,6 +586,7 @@ def build_report(run_id):
     status = read_status(run_dir)
     hosts = parse_hosts(run_dir)
     findings = parse_findings(run_dir)
+    hosts = attach_host_findings(hosts, findings)
 
     counts = {s: 0 for s in SEVERITY_ORDER}
     for f in findings:
@@ -594,10 +648,9 @@ def list_scans():
         if not RUN_ID_RE.match(run_id):
             continue
         st = read_status(d)
-        nuclei = d / "nuclei.jsonl"
-        n_find = 0
-        if nuclei.exists():
-            n_find = sum(1 for l in nuclei.read_text(errors="replace").splitlines() if l.strip())
+        # Grouped count, same as the progress tile and the report -- see the
+        # note in scan_progress() for why a raw line count disagrees with them.
+        n_find = len(parse_findings(d))
         rows.append({
             "run_id": run_id,
             "state": st.get("state", "done"),
@@ -670,6 +723,26 @@ def logout():
 def index():
     return render_template("index.html", scans=list_scans(),
                            flash=session.pop("flash", None))
+
+
+@app.route("/rescan/<run_id>")
+def rescan(run_id):
+    """Prefill the new-scan form from a past run's scope, client, and profile.
+
+    Does not launch anything -- the operator still reviews what is filled in
+    and ticks authorisation themselves, same as starting from scratch.
+    """
+    run_dir = run_dir_for(run_id)
+    status = read_status(run_dir)
+    tf = run_dir / "targets.input"
+    if not tf.exists():
+        tf = run_dir / "targets.txt"
+    targets = tf.read_text(errors="replace").strip() if tf.exists() else ""
+    return render_template("index.html", scans=list_scans(),
+                           flash=session.pop("flash", None),
+                           prefill_targets=targets,
+                           prefill_client=status.get("client", ""),
+                           prefill_profile=status.get("profile", "standard"))
 
 
 @app.route("/scan", methods=["POST"])
@@ -826,6 +899,68 @@ def purge():
     for d in sorted(OUTPUT_ROOT.glob("scan-*")):
         if not d.is_dir():
             continue
+        if read_status(d).get("state") == "running":
+            skipped += 1
+            continue
+        shutil.rmtree(d, ignore_errors=True)
+        removed += 1
+    session["flash"] = (f"Deleted {removed} scan result(s)."
+                        + (f" {skipped} still running and left in place." if skipped else ""))
+    return redirect(url_for("index"))
+
+
+def render_standalone_report(run_id):
+    """A report render with the stylesheet inlined.
+
+    The normal page links /static/style.css, which stops resolving the
+    moment the file is out of the appliance's hands -- archived, emailed,
+    opened on a laptop with no route back here. This makes each export a
+    single file that looks right on its own.
+    """
+    html = render_template("report.html", r=build_report(run_id))
+    css = (Path(app.static_folder) / "style.css").read_text()
+    return html.replace(
+        '<link rel="stylesheet" href="/static/style.css">',
+        f"<style>\n{css}\n</style>")
+
+
+def selected_run_ids():
+    """Validated run_ids from a bulk form post -- never trust the raw list."""
+    out = []
+    for rid in request.form.getlist("run_ids"):
+        if RUN_ID_RE.match(rid) and (OUTPUT_ROOT / f"scan-{rid}").is_dir():
+            out.append(rid)
+    return out
+
+
+@app.route("/reports/export", methods=["POST"])
+def reports_export():
+    run_ids = selected_run_ids()
+    if not run_ids:
+        session["flash"] = "No reports selected."
+        return redirect(url_for("index"))
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rid in run_ids:
+            client = read_status(run_dir_for(rid)).get("client", "").strip()
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", client).strip("_") if client else "report"
+            # rid is always unique, so the filename is too even if two scans
+            # share a client name.
+            zf.writestr(f"{safe}-{rid}.html", render_standalone_report(rid))
+    buf.seek(0)
+
+    ts = utcnow().strftime("%Y%m%d-%H%M%S")
+    return send_file(buf, mimetype="application/zip", as_attachment=True,
+                     download_name=f"reports-{ts}.zip")
+
+
+@app.route("/reports/delete", methods=["POST"])
+def reports_delete():
+    run_ids = selected_run_ids()
+    removed = skipped = 0
+    for rid in run_ids:
+        d = run_dir_for(rid)
         if read_status(d).get("state") == "running":
             skipped += 1
             continue
