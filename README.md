@@ -65,6 +65,29 @@ live progress, and the finished report has a Print / Save as PDF button.
 On an unfamiliar network, run Quick look first. A couple of minutes tells you
 whether you can reach the targets at all, before you commit to a long scan.
 
+Each report page offers **Print / Save as PDF** plus exports: a standalone HTML
+copy, CSV spreadsheets (inventory + findings), structured JSON, and a Nessus v2
+XML file for importing into Tenable and similar tooling. The scans list has a
+bulk export with the same format choices.
+
+To see what changed since a previous scan, open a report and pick a run from the
+"Compare this run with" box, or tick two scans on the list and press
+**Compare two**. The comparison shows new and gone systems, ports that opened or
+closed per host, and findings that are new, resolved, or moved to different hosts.
+
+**Scheduled scans** re-run a network automatically. On the new-scan form, tick
+"Repeat this scan on a schedule" and the frequency settings appear next to it:
+daily, weekly, or every-N-hours, plus a profile and client name. Times are
+24-hour UTC.
+
+If a scheduled run comes due while another scan is still running (say a slow
+scan overruns its own interval), each schedule chooses between **scan as soon
+as possible** — it starts within seconds of the current scan finishing — or
+**skip this occurrence** and wait for the next scheduled run. The appliance
+never stacks two scans. Schedules live in `output/schedules.json`, so they
+survive restarts and are wiped with the rest of a client's data when the
+appliance is redeployed.
+
 # Command line
 
 Works alongside the web interface and is unaffected by it.

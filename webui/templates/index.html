@@ -3,7 +3,7 @@
 
 {% block content %}
 <h1>Start a scan</h1>
-<p class="lede">Enter the networks you are authorized to assess. One address or range per line.</p>
+<p class="lede">Enter the networks you are authorized to assess. One address or range per line. Tick “Repeat this scan on a schedule” to run it automatically.</p>
 
 {% if error %}<div class="error">{{ error }}</div>{% endif %}
 {% if flash %}<div class="notice">{{ flash }}</div>{% endif %}
@@ -22,7 +22,7 @@ git pull
 </div>
 
 <div class="card">
-  <form method="post" action="{{ url_for('scan') }}">
+  <form method="post" action="{{ url_for('scan') }}" id="scan-form">
     <div class="field">
       <label for="targets">Target networks</label>
       <div class="hint">Hostnames, single IPs, or CIDR ranges, e.g. <span class="mono">192.168.1.0/24</span></div>
@@ -54,12 +54,62 @@ git pull
       </div>
     </div>
 
+    <div class="schedule-opt">
+      <label class="confirm">
+        <input type="checkbox" name="schedule" id="scan-schedule" {% if prefill_schedule %}checked{% endif %}>
+        Repeat this scan on a schedule
+      </label>
+      <div id="scan-sched-settings" style="{% if prefill_schedule %}display:block{% else %}display:none{% endif %}">
+        <div class="field">
+          <label for="scan-sched-name">Schedule name <span class="hint" style="display:inline">(defaults to the client name or first target)</span></label>
+          <input type="text" id="scan-sched-name" name="sched_name" placeholder="Weekly client scan" value="{{ prefill_sched_name or '' }}">
+        </div>
+        <div class="row">
+          <div class="field" style="max-width:220px">
+            <label for="scan-sched-kind">Repeat</label>
+            <select id="scan-sched-kind" name="sched_kind">
+              <option value="daily" {% if prefill_sched_kind == "daily" %}selected{% endif %}>Daily</option>
+              <option value="weekly" {% if prefill_sched_kind == "weekly" %}selected{% endif %}>Weekly</option>
+              <option value="interval" {% if prefill_sched_kind == "interval" %}selected{% endif %}>Every N hours</option>
+            </select>
+          </div>
+          <div class="field" style="max-width:220px" id="scan-sched-time-wrap">
+            <label for="scan-sched-time">Time (UTC)</label>
+            <input type="text" id="scan-sched-time" name="sched_time" placeholder="02:30" pattern="[0-2]?[0-9]:[0-5][0-9]" value="{{ prefill_sched_time or '' }}">
+          </div>
+          <div class="field" style="max-width:220px" id="scan-sched-weekday-wrap">
+            <label for="scan-sched-weekday">Day of week</label>
+            <select id="scan-sched-weekday" name="sched_weekday">
+              {% for wd in weekdays %}
+              <option value="{{ wd }}" {% if prefill_sched_weekday == wd %}selected{% endif %}>{{ wd|capitalize }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field" style="max-width:220px" id="scan-sched-interval-wrap">
+            <label for="scan-sched-interval">Every (hours)</label>
+            <input type="number" id="scan-sched-interval" name="sched_interval_hours" value="{{ prefill_sched_interval or '24' }}" min="1" step="1">
+          </div>
+        </div>
+        <div class="field">
+          <label>If a scheduled run is due while another scan is still running</label>
+          <label class="confirm" style="margin-bottom:6px">
+            <input type="radio" name="overlap" value="asap" {% if prefill_overlap != "skip" %}checked{% endif %}>
+            Scan as soon as possible
+          </label>
+          <label class="confirm" style="margin-bottom:6px">
+            <input type="radio" name="overlap" value="skip" {% if prefill_overlap == "skip" %}checked{% endif %}>
+            Skip this occurrence
+          </label>
+        </div>
+      </div>
+    </div>
+
     <label class="confirm">
       <input type="checkbox" name="authorized" required>
       I have written authorization to scan these networks.
     </label>
 
-    <button class="btn" type="submit">Start scan</button>
+    <button class="btn" type="submit">{% if prefill_schedule %}Schedule scan{% else %}Start scan{% endif %}</button>
   </form>
 </div>
 
@@ -69,7 +119,17 @@ git pull
   <form method="post" id="bulk-form">
     <div class="bulk-bar no-print" id="bulk-bar" style="display:none">
       <span id="bulk-count"></span>
+      <input type="hidden" name="run_a" id="compare-a">
+      <input type="hidden" name="run_b" id="compare-b">
+      <select name="fmt" id="bulk-fmt" style="width:auto; padding:6px 10px; font-size:13px">
+        <option value="html">HTML reports</option>
+        <option value="csv">CSV spreadsheets</option>
+        <option value="json">Structured JSON</option>
+        <option value="nessus">Nessus XML</option>
+      </select>
       <button type="submit" formaction="{{ url_for('reports_export') }}" class="btn btn-secondary">Export selected</button>
+      <button type="submit" formaction="{{ url_for('compare') }}" class="btn btn-secondary" id="compare-btn"
+              disabled title="Select exactly two scans to compare">Compare two</button>
       <button type="submit" formaction="{{ url_for('reports_delete') }}" class="btn btn-secondary"
               onclick="return confirm('Delete the selected scan results? This cannot be undone.');">Delete selected</button>
     </div>
@@ -89,6 +149,7 @@ git pull
           {% elif s.state == "interrupted" %}Interrupted
           {% elif s.state == "cancelled" %}Stopped
           {% else %}Complete{% endif %}
+          {% if s.schedule %}<br><span class="hint">via schedule “{{ s.schedule }}”</span>{% endif %}
         </td>
         <td>{{ s.findings }}</td>
         <td class="no-print" style="white-space:nowrap">
@@ -152,6 +213,18 @@ git pull
     bulkCount.textContent = n + ' selected';
     selectAll.indeterminate = n > 0 && n < rowChecks.length;
     selectAll.checked = n === rowChecks.length;
+
+    // "Compare two" needs exactly two selected; the run ids are copied into
+    // the form's hidden fields so the same form serves compare and export.
+    var checked = [];
+    rowChecks.forEach(function (c) { if (c.checked) checked.push(c.value); });
+    var compareBtn = document.getElementById('compare-btn');
+    var exactTwo = checked.length === 2;
+    if (compareBtn) {
+      compareBtn.disabled = !exactTwo;
+      document.getElementById('compare-a').value = exactTwo ? checked[0] : '';
+      document.getElementById('compare-b').value = exactTwo ? checked[1] : '';
+    }
   }
 
   selectAll.addEventListener('change', function () {
@@ -159,6 +232,34 @@ git pull
     refresh();
   });
   rowChecks.forEach(function (c) { c.addEventListener('change', refresh); });
+})();
+
+(function () {
+  // "Repeat this scan on a schedule": reveal the frequency settings and
+  // retitle the submit button, and apply the recurrence to its fields.
+  var cb = document.getElementById('scan-schedule');
+  var wrap = document.getElementById('scan-sched-settings');
+  var kind = document.getElementById('scan-sched-kind');
+  var btn = document.querySelector('#scan-form button[type=submit]');
+  if (!cb || !wrap) return;
+  function kindToggle() {
+    if (!kind) return;
+    var v = kind.value;
+    document.getElementById('scan-sched-time-wrap').style.display =
+      (v === 'daily' || v === 'weekly') ? 'block' : 'none';
+    document.getElementById('scan-sched-weekday-wrap').style.display =
+      v === 'weekly' ? 'block' : 'none';
+    document.getElementById('scan-sched-interval-wrap').style.display =
+      v === 'interval' ? 'block' : 'none';
+  }
+  function refresh() {
+    wrap.style.display = cb.checked ? 'block' : 'none';
+    if (btn) btn.textContent = cb.checked ? 'Schedule scan' : 'Start scan';
+    if (cb.checked) kindToggle();
+  }
+  cb.addEventListener('change', refresh);
+  if (kind) kind.addEventListener('change', kindToggle);
+  refresh();
 })();
 
 document.querySelectorAll('.chip').forEach(function (b) {

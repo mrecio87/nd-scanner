@@ -361,6 +361,8 @@ html[data-theme="dark"] .finding { background: var(--surface); }
 html[data-theme="dark"] .bulk-bar { background: #12212e; color: #cfe3f5; }
 html[data-theme="dark"] .chip { background: #16242f; color: #7cc0f7; }
 html[data-theme="dark"] .notice { background: #12212e; color: #cfe3f5; }
+html[data-theme="dark"] .port-change { background: #132a16; color: #7fe09a; border-color: #2d5a38; }
+html[data-theme="dark"] .port-change.closed { background: #2a1618; color: #ffb4b4; border-color: #5a2d30; }
 
 .theme-toggle {
   display: flex; align-items: center; gap: 2px;
@@ -452,3 +454,33 @@ html[data-theme="dark"] .notice { background: #12212e; color: #cfe3f5; }
 .bulk-bar .btn, .bulk-bar .btn-secondary { padding: 6px 14px; font-size: 13px; }
 table input[type=checkbox] { width: auto; margin: 0; vertical-align: middle; }
 .confirm input { width: auto; }
+
+/* Buttons that sit side by side in a row (report export menu). */
+.btn-group { display: inline-flex; gap: 8px; flex-wrap: wrap; margin-left: 10px; }
+.btn-group .btn-secondary { padding: 10px 14px; font-size: 13.5px; }
+
+/* Per-port change pills in the scan comparison page. */
+.port-change {
+  display: inline-block;
+  font-family: ui-monospace, "Courier New", monospace;
+  font-size: 12px; font-weight: 600;
+  background: #eef7ee; color: #1f7a2c; border: 1px solid #bfe3c2;
+  padding: 2px 7px; border-radius: 5px; margin: 1px 3px 1px 0;
+}
+.port-change.closed {
+  background: #fdecec; color: #a33434; border-color: #f0c2c2;
+}
+
+/* Schedule settings revealed by the "repeat this scan" checkbox on the scan
+   form: a nested panel so it reads as part of the form, not another section. */
+.schedule-opt { margin: 2px 0 4px; }
+.schedule-opt .confirm { margin-bottom: 14px; }
+#scan-sched-settings {
+  background: #f7fafc;
+  border: 1px solid var(--rule);
+  border-left: 3px solid var(--brand);
+  border-radius: 8px;
+  padding: 16px 18px 4px;
+  margin-bottom: 14px;
+}
+html[data-theme="dark"] #scan-sched-settings { background: #141b23; }

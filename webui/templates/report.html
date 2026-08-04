@@ -16,7 +16,28 @@
 
 <div class="no-print" style="margin-bottom:18px">
   <button class="btn btn-secondary" onclick="window.print()">Print / Save as PDF</button>
+  <div class="btn-group">
+    <a class="btn btn-secondary" href="{{ url_for('report_export', run_id=r.run_id, fmt='html') }}">Export HTML</a>
+    <a class="btn btn-secondary" href="{{ url_for('report_export', run_id=r.run_id, fmt='csv') }}">Export CSV</a>
+    <a class="btn btn-secondary" href="{{ url_for('report_export', run_id=r.run_id, fmt='json') }}">Export JSON</a>
+    <a class="btn btn-secondary" href="{{ url_for('report_export', run_id=r.run_id, fmt='nessus') }}">Export Nessus</a>
+  </div>
 </div>
+
+{% if others is defined and others %}
+<div class="no-print card" style="padding:14px 18px">
+  <form method="post" action="{{ url_for('compare') }}" style="display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:0">
+    <input type="hidden" name="run_a" value="{{ r.run_id }}">
+    <label for="run_b" style="margin:0; font-weight:600">Compare this run with</label>
+    <select name="run_b" id="run_b" style="width:auto; min-width:280px">
+      {% for o in others %}
+      <option value="{{ o.run_id }}">{{ o.started[:16].replace("T", " ") }} — {{ o.client or "no client" }}</option>
+      {% endfor %}
+    </select>
+    <button class="btn btn-secondary" type="submit">Compare</button>
+  </form>
+</div>
+{% endif %}
 
 {# ------------------------------------------------------- executive verdict #}
 {% if r.degraded %}

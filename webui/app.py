@@ -4,6 +4,8 @@
 Kept small: the appliance's whole reason for existing is a low resource
 footprint, so this is Flask + the standard library and nothing else.
 """
+import csv
+import hashlib
 import io
 import json
 import os
@@ -19,7 +21,7 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 import zipfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from flask import (Flask, abort, jsonify, redirect, render_template, request,
@@ -41,6 +43,18 @@ TLS_SAN = os.environ.get("TLS_SAN", "")
 TLS_CERT = os.environ.get("TLS_CERT", "")
 TLS_KEY = os.environ.get("TLS_KEY", "")
 RUN_ID_RE = re.compile(r"^\d{8}-\d{6}$")
+
+# Recurring scans. Schedules are plain JSON under /output, so they survive
+# container restarts and never leak client data into the repository.
+SCHEDULE_FILE = Path(os.environ.get("SCHEDULE_FILE", "/output/schedules.json"))
+SCHEDULE_KINDS = ["daily", "weekly", "interval"]
+WEEKDAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+WEEKDAY_LABEL = {"mon": "Monday", "tue": "Tuesday", "wed": "Wednesday",
+                 "thu": "Thursday", "fri": "Friday", "sat": "Saturday",
+                 "sun": "Sunday"}
+
+# Nessus maps severities onto a 0-4 integer scale; 0 is informational.
+NESSUS_SEVERITY = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 SEVERITY_ORDER = ["critical", "high", "medium", "low", "info"]
 SEVERITY_LABEL = {
@@ -369,6 +383,23 @@ def log_tail(run_dir, n=200):
 
 # ----------------------------------------------------------------- scanning
 
+def profile_opts(profile):
+    """Map a UI profile name onto the scan-knob overrides it implies.
+
+    Shared by the manual scan form and the scheduler so a scheduled run of the
+    same profile behaves identically to one launched by hand.
+    """
+    profile = profile or "standard"
+    if profile == "quick":
+        return {"NAABU_TOP_PORTS": "100", "SKIP_NUCLEI": "true"}
+    if profile == "gentle":
+        return {"NAABU_TOP_PORTS": "1000", "NAABU_RATE": "200",
+                "NUCLEI_CONCURRENCY": "10", "NMAP_ARGS": "-sV -Pn -T2"}
+    if profile == "thorough":
+        return {"NAABU_TOP_PORTS": "full"}
+    return {"NAABU_TOP_PORTS": "1000"}
+
+
 def start_scan(targets, opts):
     run_id = utcnow().strftime("%Y%m%d-%H%M%S")
     run_dir = OUTPUT_ROOT / f"scan-{run_id}"
@@ -385,7 +416,8 @@ def start_scan(targets, opts):
 
     write_status(run_dir, state="running", started=utcnow().isoformat(),
                  targets=len(targets), client=opts.get("_client", ""),
-                 profile=opts.get("_profile", ""))
+                 profile=opts.get("_profile", ""),
+                 _schedule=opts.get("_schedule", ""))
 
     logf = open(run_dir / "scan.log", "wb")
     # New session, so the whole tool chain can be signaled as one group:
@@ -624,6 +656,264 @@ def build_report(run_id):
     }
 
 
+# -------------------------------------------------------------- exporting
+
+EXPORT_FORMATS = ["html", "csv", "json", "nessus"]
+EXPORT_LABEL = {"html": "HTML report", "csv": "CSV spreadsheets",
+                "json": "Structured JSON", "nessus": "Nessus XML"}
+
+
+def _xml_clean(text):
+    """Drop bytes XML 1.0 cannot represent (control chars etc.)."""
+    if not text:
+        return ""
+    out = []
+    for ch in str(text):
+        code = ord(ch)
+        if ch in "\t\n\r" or 0x20 <= code <= 0xD7FF or 0xE000 <= code <= 0xFFFD:
+            out.append(ch)
+    return "".join(out)
+
+
+def _plugin_id(tid):
+    """Stable numeric id for a template, for tools that want a number.
+
+    Python's built-in hash is randomised per process, so it cannot be used
+    here -- the same report must map to the same id every time it is exported.
+    """
+    digest = hashlib.md5(tid.encode("utf-8", "replace")).hexdigest()
+    return str(int(digest[:8], 16))
+
+
+def inventory_csv_text(r):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["host", "hostname", "os", "port", "protocol", "service",
+                "software", "extrainfo"])
+    for ip, host in r["hosts"].items():
+        for p in host["ports"]:
+            w.writerow([ip, host.get("hostname", ""), host.get("os", ""),
+                        p["port"], "tcp", p.get("service", ""),
+                        p.get("product", ""), p.get("extrainfo", "")])
+    return buf.getvalue()
+
+
+def findings_csv_text(r):
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["severity", "name", "template_id", "host", "assets",
+                "description", "remediation"])
+    for f in r["findings"]:
+        ips = f.get("ips") or [""]
+        assets = "; ".join(f.get("assets") or [])
+        for ip in ips:
+            w.writerow([f["severity"], f["name"], f["id"], ip, assets,
+                        f.get("description", ""), f.get("remediation", "")])
+    return buf.getvalue()
+
+
+def report_json_text(r):
+    return json.dumps(r, indent=2, ensure_ascii=False)
+
+
+def nessus_xml(r):
+    """A Nessus v2 document so results import into Tenable and its ecosystem."""
+    root = ET.Element("NessusClientData_v2")
+    report = ET.SubElement(root, "Report", name=f"nd-scanner {r['run_id']}")
+
+    for ip, host in r["hosts"].items():
+        rhost = ET.SubElement(report, "ReportHost", name=ip)
+        props = ET.SubElement(rhost, "HostProperties")
+        if host.get("hostname"):
+            ET.SubElement(props, "tag", name="host-fqdn").text = host["hostname"]
+        ET.SubElement(props, "tag", name="host-ip").text = ip
+        if host.get("os"):
+            ET.SubElement(props, "tag", name="operating-system").text = host["os"]
+        ET.SubElement(props, "tag", name="mac-address").text = ""
+        ET.SubElement(props, "tag", name="HOST_START").text = r["started"]
+        ET.SubElement(props, "tag", name="HOST_END").text = r["started"]
+
+        # Every open port as an informational item, so the import carries the
+        # full inventory even for hosts with no vulnerabilities.
+        for p in host["ports"]:
+            item = ET.SubElement(rhost, "ReportItem", port=str(p["port"]),
+                                 svc_name=p.get("service") or "unknown",
+                                 protocol="tcp", severity="0",
+                                 pluginID=_plugin_id(f"port-{p['port']}"),
+                                 pluginName="Open port",
+                                 pluginFamily="Port scanning")
+            ET.SubElement(item, "description").text = (
+                f"Port {p['port']}/tcp is open and reachable.")
+            svc = " ".join(x for x in (p.get("service"), p.get("product")) if x)
+            if svc:
+                ET.SubElement(item, "plugin_output").text = f"Service: {svc}"
+
+        for f in r["findings"]:
+            sev = NESSUS_SEVERITY.get(f["severity"], 0)
+            item = ET.SubElement(
+                rhost, "ReportItem", port="0", svc_name="general",
+                protocol="tcp", severity=str(sev),
+                pluginID=_plugin_id(f["id"]),
+                pluginName=_xml_clean(f["name"]) or f["id"],
+                pluginFamily=f["severity"].title())
+            if f.get("description"):
+                ET.SubElement(item, "description").text = _xml_clean(f["description"])
+            if f.get("remediation"):
+                ET.SubElement(item, "solution").text = _xml_clean(f["remediation"])
+            if f.get("ips"):
+                ET.SubElement(item, "plugin_output").text = (
+                    "Affected hosts: " + ", ".join(sorted(f["ips"])))
+            ET.SubElement(item, "cvss_base_score").text = "0.0"
+            ET.SubElement(item, "cve").text = ""
+
+    body = ET.tostring(root, encoding="unicode")
+    return '<?xml version="1.0"?>\n' + body + "\n"
+
+
+def export_archive(run_ids, fmt):
+    """A zip of one or more runs in a single format.
+
+    Called by the bulk export route. "html" keeps the current behaviour of a
+    standalone, self-contained report per run; the other formats are machine
+    readable so results feed straight into other tooling.
+    """
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for rid in run_ids:
+            r = build_report(rid)
+            client = (r.get("client") or "").strip()
+            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", client).strip("_") or "report"
+            stem = f"{safe}-{rid}"
+            if fmt == "html":
+                zf.writestr(f"{stem}.html", render_standalone_report(rid))
+            elif fmt == "csv":
+                zf.writestr(f"{stem}-inventory.csv", inventory_csv_text(r))
+                zf.writestr(f"{stem}-findings.csv", findings_csv_text(r))
+            elif fmt == "json":
+                zf.writestr(f"{stem}.json", report_json_text(r))
+            else:  # nessus
+                zf.writestr(f"{stem}.nessus", nessus_xml(r))
+    buf.seek(0)
+    return buf
+
+
+def report_export_bytes(fmt, rid):
+    r = build_report(rid)
+    if fmt == "json":
+        return report_json_text(r).encode("utf-8"), "application/json"
+    if fmt == "nessus":
+        return nessus_xml(r).encode("utf-8"), "application/xml"
+    return render_standalone_report(rid).encode("utf-8"), "text/html"
+
+
+# ---------------------------------------------------------------- diffing
+
+def port_set(hosts):
+    """{ip: {port, ...}} -- what was open where, per run."""
+    return {ip: {p["port"] for p in h["ports"]} for ip, h in hosts.items()}
+
+
+def compare_runs(baseline_id, comparison_id):
+    """Everything that changed between two scans.
+
+    Direction matters: "new" means present in the comparison run but not the
+    baseline, so the baseline should be the older scan and the comparison the
+    newer one. Comparing scans of different networks produces a mostly-meaningless
+    "everything changed" and is the operator's call, not something to prevent.
+    """
+    b_dir = run_dir_for(baseline_id)
+    c_dir = run_dir_for(comparison_id)
+    b_status = read_status(b_dir)
+    c_status = read_status(c_dir)
+
+    hosts_b = parse_hosts(b_dir)
+    hosts_c = parse_hosts(c_dir)
+    ports_b = port_set(hosts_b)
+    ports_c = port_set(hosts_c)
+
+    findings_b = {f["id"]: f for f in parse_findings(b_dir)}
+    findings_c = {f["id"]: f for f in parse_findings(c_dir)}
+
+    def find_count(findings):
+        counts = {s: 0 for s in SEVERITY_ORDER}
+        for f in findings.values():
+            counts[f["severity"]] += 1
+        return counts
+
+    all_ips = set(ports_b) | set(ports_c)
+    host_rows = []
+    for ip in sorted(all_ips, key=ip_sort_key):
+        pa, pc = ports_b.get(ip, set()), ports_c.get(ip, set())
+        hb, hc = hosts_b.get(ip, {}), hosts_c.get(ip, {})
+        new_ports = sorted(pc - pa)
+        closed_ports = sorted(pa - pc)
+        if not new_ports and not closed_ports:
+            continue
+        host_rows.append({
+            "ip": ip,
+            "hostname": hc.get("hostname") or hb.get("hostname", ""),
+            "present_baseline": ip in ports_b,
+            "present_comparison": ip in ports_c,
+            "new_ports": new_ports,
+            "closed_ports": closed_ports,
+        })
+    host_rows.sort(key=lambda r: (r["present_baseline"] != r["present_comparison"],
+                                  -len(r["new_ports"]) - len(r["closed_ports"]),
+                                  ip_sort_key(r["ip"])))
+
+    new_hosts = [r for r in host_rows if not r["present_baseline"] and r["present_comparison"]]
+    gone_hosts = [r for r in host_rows if r["present_baseline"] and not r["present_comparison"]]
+
+    new_findings = []
+    for tid, f in findings_c.items():
+        if tid not in findings_b:
+            new_findings.append(f)
+    new_findings.sort(key=lambda f: (SEVERITY_ORDER.index(f["severity"]), f["name"].lower()))
+
+    resolved_findings = []
+    for tid, f in findings_b.items():
+        if tid not in findings_c:
+            resolved_findings.append(f)
+    resolved_findings.sort(key=lambda f: (SEVERITY_ORDER.index(f["severity"]), f["name"].lower()))
+
+    changed_findings = []
+    for tid, f in findings_c.items():
+        prev = findings_b.get(tid)
+        if prev is None:
+            continue
+        ca, ra = set(f.get("assets") or []), set(prev.get("assets") or [])
+        added, removed = sorted(ca - ra), sorted(ra - ca)
+        if added or removed:
+            changed_findings.append({
+                "id": tid,
+                "name": f["name"],
+                "severity": f["severity"],
+                "added": added,
+                "removed": removed,
+            })
+    changed_findings.sort(key=lambda f: (SEVERITY_ORDER.index(f["severity"]), f["name"].lower()))
+
+    return {
+        "baseline": {"run_id": baseline_id, "started": b_status.get("started", ""),
+                     "client": b_status.get("client", ""),
+                     "hosts": len(ports_b), "counts": find_count(findings_b)},
+        "comparison": {"run_id": comparison_id, "started": c_status.get("started", ""),
+                       "client": c_status.get("client", ""),
+                       "hosts": len(ports_c), "counts": find_count(findings_c)},
+        "new_hosts": new_hosts,
+        "gone_hosts": gone_hosts,
+        "host_rows": host_rows,
+        "new_findings": new_findings,
+        "resolved_findings": resolved_findings,
+        "changed_findings": changed_findings,
+    }
+
+
+def other_runs(exclude_run_id):
+    """Runs other than the given one, for the report page's compare picker."""
+    return [r for r in list_scans() if r["run_id"] != exclude_run_id][:30]
+
+
 def reap_orphaned_runs():
     """Mark scans that died with a previous container.
 
@@ -641,6 +931,7 @@ def reap_orphaned_runs():
 
 def list_scans():
     rows = []
+    sched_names = {s["id"]: s["name"] for s in load_schedules() if s.get("id")}
     for d in sorted(OUTPUT_ROOT.glob("scan-*"), reverse=True):
         if not d.is_dir():
             continue
@@ -651,14 +942,246 @@ def list_scans():
         # Grouped count, same as the progress tile and the report -- see the
         # note in scan_progress() for why a raw line count disagrees with them.
         n_find = len(parse_findings(d))
+        sched_id = st.get("_schedule", "")
         rows.append({
             "run_id": run_id,
             "state": st.get("state", "done"),
             "client": st.get("client", ""),
             "started": st.get("started", ""),
             "findings": n_find,
+            "schedule": sched_names.get(sched_id, "") if sched_id else "",
         })
     return rows[:40]
+
+
+# -------------------------------------------------------------- scheduling
+
+_sched_lock = threading.Lock()
+# When a scheduled run comes due while another scan is still running:
+#   "asap"  -> run it as soon as the current scan finishes (retry shortly)
+#   "skip"  -> drop this occurrence, run the next scheduled one
+SCHEDULE_OVERLAPS = ["asap", "skip"]
+SCHEDULER_RETRY_SECONDS = 30   # asap retry while another scan is running
+
+
+def load_schedules():
+    if not SCHEDULE_FILE.exists():
+        return []
+    try:
+        data = json.loads(SCHEDULE_FILE.read_text())
+    except (ValueError, OSError):
+        return []
+    return data if isinstance(data, list) else []
+
+
+def save_schedules(schedules):
+    SCHEDULE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    SCHEDULE_FILE.write_text(json.dumps(schedules, indent=2))
+
+
+def parse_hhmm(value):
+    m = re.match(r"^([01]?\d|2[0-3]):([0-5]\d)$", (value or "").strip())
+    if not m:
+        return None
+    return int(m.group(1)), int(m.group(2))
+
+
+def next_occurrence(sch, reference=None):
+    """The next wall-clock moment this schedule should fire, in UTC."""
+    reference = reference or utcnow()
+    kind = sch.get("kind", "daily")
+    if kind == "interval":
+        try:
+            hours = float(sch.get("interval_hours") or 24)
+        except (TypeError, ValueError):
+            hours = 24.0
+        return reference + timedelta(hours=hours)
+
+    hm = parse_hhmm(sch.get("time"))
+    if hm is None:
+        return reference + timedelta(days=1)
+    hour, minute = hm
+    candidate = reference.replace(hour=hour, minute=minute, second=0, microsecond=0)
+    if kind == "weekly":
+        target = WEEKDAYS.index(sch.get("weekday", "mon"))
+        delta = (target - candidate.weekday()) % 7
+        if delta == 0 and candidate <= reference:
+            delta = 7
+        candidate += timedelta(days=delta)
+    elif candidate <= reference:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def ensure_next_run(sch, reference=None):
+    if sch.get("next_run"):
+        try:
+            datetime.fromisoformat(sch["next_run"].replace("Z", "+00:00"))
+            return
+        except (ValueError, AttributeError):
+            pass
+    sch["next_run"] = next_occurrence(sch, reference).isoformat()
+
+
+def make_schedule(name, targets, client, kind, time_s, weekday, interval,
+                  profile="standard", overlap="asap", enabled=True):
+    """Validate schedule settings and return (schedule, error). Either a
+    schedule dict with a next_run, or None and a message for the UI. Shared by
+    the scan form's "repeat" checkbox and the standalone schedule form."""
+    if not name:
+        return None, "Give the schedule a name."
+    if isinstance(targets, str):
+        raw_targets = targets
+        cleaned = clean_targets(targets)
+    else:                        # already-cleaned list from the scan form
+        cleaned = list(targets)
+        raw_targets = "\n".join(cleaned)
+    if not cleaned:
+        return None, "Enter target networks for the schedule."
+    if kind not in SCHEDULE_KINDS:
+        return None, "Unknown schedule type."
+    if kind in ("daily", "weekly") and parse_hhmm(time_s) is None:
+        return None, "Enter the run time as HH:MM (24-hour, UTC)."
+    if kind == "weekly" and weekday not in WEEKDAYS:
+        return None, "Pick a valid weekday."
+    if kind == "interval":
+        try:
+            if float(interval) <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return None, "Interval must be a number of hours."
+    if overlap not in SCHEDULE_OVERLAPS:
+        return None, "Pick how overlapping runs are handled."
+    sch = {
+        "id": secrets.token_hex(6),
+        "name": name,
+        "targets": raw_targets,
+        "client": client,
+        "kind": kind,
+        "time": time_s if kind != "interval" else "",
+        "weekday": weekday if kind == "weekly" else "mon",
+        "interval_hours": interval if kind == "interval" else "",
+        "profile": profile,
+        "enabled": enabled,
+        "overlap": overlap,
+        "created": utcnow().isoformat(),
+        "last_run": None, "last_run_id": None, "note": None,
+        "next_run": None,
+    }
+    ensure_next_run(sch)
+    return sch, None
+
+
+def parse_next_run(sch):
+    try:
+        return datetime.fromisoformat(sch.get("next_run", "").replace("Z", "+00:00"))
+    except (ValueError, AttributeError):
+        return None
+
+
+def list_schedules():
+    """Schedules with display fields resolved (labels, human next-run)."""
+    out = []
+    for sch in load_schedules():
+        ensure_next_run(sch)
+        display = {
+            "id": sch.get("id", ""),
+            "name": sch.get("name", ""),
+            "client": sch.get("client", ""),
+            "profile": sch.get("profile", "standard"),
+            "enabled": sch.get("enabled", True),
+            "kind": sch.get("kind", "daily"),
+            "overlap": sch.get("overlap", "asap"),
+            "note": sch.get("note"),
+            "last_run_id": sch.get("last_run_id"),
+            "last_run": sch.get("last_run", ""),
+        }
+        if sch["kind"] == "interval":
+            display["schedule_text"] = "every {0:g} hour{1}".format(
+                float(sch.get("interval_hours") or 24),
+                "s" if float(sch.get("interval_hours") or 24) != 1 else "")
+        elif sch["kind"] == "weekly":
+            display["schedule_text"] = WEEKDAY_LABEL.get(sch.get("weekday"), "") + \
+                " at " + (sch.get("time") or "--:--")
+        else:
+            display["schedule_text"] = "daily at " + (sch.get("time") or "--:--")
+        next_dt = parse_next_run(sch)
+        display["next_run"] = next_dt.isoformat()[:16].replace("T", " ") if next_dt else ""
+        out.append(display)
+    return out
+
+
+def tick_schedules():
+    """One pass of the scheduler. Runs every few seconds from its own thread."""
+    with _sched_lock:
+        scheds = load_schedules()
+        if not scheds:
+            return
+        save_schedules(scheds)          # persists any ensure_next_run backfill
+
+    now = utcnow()
+    dirty = False
+    for sch in scheds:
+        if not sch.get("enabled", True):
+            continue
+        due = parse_next_run(sch)
+        if due is None:
+            ensure_next_run(sch, now)
+            dirty = True
+            continue
+        if due > now:
+            continue
+
+        targets = clean_targets(sch.get("targets", ""))
+        if not targets:
+            sch["note"] = "Skipped: no valid targets remain."
+            sch["next_run"] = next_occurrence(sch, now).isoformat()
+            dirty = True
+            continue
+
+        with JOBS_LOCK:
+            running = any(p.poll() is None for p in JOBS.values())
+        if running:
+            due_text = due.isoformat()[:16].replace("T", " ")
+            if sch.get("overlap", "asap") == "skip":
+                # Drop this occurrence; the next scheduled one still fires.
+                sch["note"] = (f"Skipped: another scan was running at {due_text} UTC. "
+                               "Next scheduled run still fires.")
+                sch["next_run"] = next_occurrence(sch, now).isoformat()
+            else:
+                # asap: keep it pending and retry shortly, so it launches
+                # within seconds of the running scan finishing.
+                sch["note"] = (f"Another scan was running at {due_text} UTC; "
+                               "will run when it finishes.")
+                sch["next_run"] = (now + timedelta(seconds=SCHEDULER_RETRY_SECONDS)).isoformat()
+            dirty = True
+            continue
+
+        try:
+            opts = profile_opts(sch.get("profile", "standard"))
+            opts["_client"] = (sch.get("client") or "").strip()
+            opts["_schedule"] = sch.get("id", "")
+            run_id = start_scan(targets, opts)
+            sch["last_run"] = now.isoformat()
+            sch["last_run_id"] = run_id
+            sch["note"] = None
+        except Exception as exc:        # keep the loop alive; never crash the web UI
+            sch["note"] = f"Could not launch the scan: {exc}"
+        sch["next_run"] = next_occurrence(sch, now).isoformat()
+        dirty = True
+
+    if dirty:
+        with _sched_lock:
+            save_schedules(scheds)
+
+
+def scheduler_loop():
+    while True:
+        try:
+            tick_schedules()
+        except Exception:
+            pass
+        time.sleep(20)
 
 
 # ----------------------------------------------------------------- routes
@@ -721,8 +1244,20 @@ def logout():
 
 @app.route("/")
 def index():
-    return render_template("index.html", scans=list_scans(),
-                           flash=session.pop("flash", None))
+    return render_index()
+
+
+def render_index(error=None, prefill=None, status=200):
+    """Render the scans page. `prefill` repopulates the form after a validation
+    error or a rescan link so the operator does not retype everything."""
+    ctx = {"scans": list_scans(),
+           "schedules": list_schedules(),
+           "sched_kinds": SCHEDULE_KINDS,
+           "weekdays": WEEKDAYS,
+           "flash": session.pop("flash", None),
+           "error": error}
+    ctx.update(prefill or {})
+    return render_template("index.html", **ctx), status
 
 
 @app.route("/rescan/<run_id>")
@@ -738,39 +1273,69 @@ def rescan(run_id):
     if not tf.exists():
         tf = run_dir / "targets.txt"
     targets = tf.read_text(errors="replace").strip() if tf.exists() else ""
-    return render_template("index.html", scans=list_scans(),
-                           flash=session.pop("flash", None),
-                           prefill_targets=targets,
-                           prefill_client=status.get("client", ""),
-                           prefill_profile=status.get("profile", "standard"))
+    return render_index(prefill={"prefill_targets": targets,
+                                 "prefill_client": status.get("client", ""),
+                                 "prefill_profile": status.get("profile", "standard")})
 
 
 @app.route("/scan", methods=["POST"])
 def scan():
     # The checkbox is required in the form, but a form can be posted directly.
     if not request.form.get("authorized"):
-        return render_template("index.html", scans=list_scans(),
-                               error="Confirm you have written authorization before starting a scan."), 400
+        return render_index(error="Confirm you have written authorization before starting a scan.",
+                            prefill=form_prefill(request.form), status=400)
 
     targets = clean_targets(request.form.get("targets", ""))
     if not targets:
-        return render_template("index.html", scans=list_scans(),
-                               error="Enter at least one target address or range."), 400
+        return render_index(error="Enter at least one target address or range.",
+                            prefill=form_prefill(request.form), status=400)
 
     profile = request.form.get("profile", "standard")
-    opts = {"_client": request.form.get("client", "").strip(), "_profile": profile}
-    if profile == "quick":
-        opts.update({"NAABU_TOP_PORTS": "100", "SKIP_NUCLEI": "true"})
-    elif profile == "gentle":
-        opts.update({"NAABU_TOP_PORTS": "1000", "NAABU_RATE": "200",
-                     "NUCLEI_CONCURRENCY": "10", "NMAP_ARGS": "-sV -Pn -T2"})
-    elif profile == "thorough":
-        opts.update({"NAABU_TOP_PORTS": "full"})
-    else:
-        opts.update({"NAABU_TOP_PORTS": "1000"})
+    client = request.form.get("client", "").strip()
+
+    # Scheduling a repeat: create a schedule instead of launching right now.
+    # The first run happens at the next occurrence, so the operator sees the
+    # confirmation in the "Scheduled scans" list rather than a scan page.
+    if request.form.get("schedule"):
+        name = (request.form.get("sched_name") or client or targets[0]).strip()
+        sch, err = make_schedule(
+            name, targets, client,
+            request.form.get("sched_kind", "daily"),
+            request.form.get("sched_time", ""),
+            request.form.get("sched_weekday", "mon").strip().lower(),
+            request.form.get("sched_interval_hours", "24"),
+            profile,
+            request.form.get("overlap", "asap"))
+        if err:
+            return render_index(error=err, prefill=form_prefill(request.form), status=400)
+        with _sched_lock:
+            scheds = load_schedules()
+            scheds.append(sch)
+            save_schedules(scheds)
+        session["flash"] = f"Scheduled “{sch['name']}”. First run at the next occurrence."
+        return redirect(url_for("index"))
+
+    opts = {"_client": client, "_profile": profile}
+    opts.update(profile_opts(profile))
 
     run_id = start_scan(targets, opts)
     return redirect(url_for("scan_view", run_id=run_id))
+
+
+def form_prefill(form):
+    """Copy submitted form values into the render prefill namespace."""
+    return {
+        "prefill_targets": form.get("targets", ""),
+        "prefill_client": form.get("client", ""),
+        "prefill_profile": form.get("profile", "standard"),
+        "prefill_schedule": form.get("schedule") == "on",
+        "prefill_sched_name": form.get("sched_name", ""),
+        "prefill_sched_kind": form.get("sched_kind", "daily"),
+        "prefill_sched_time": form.get("sched_time", ""),
+        "prefill_sched_weekday": form.get("sched_weekday", "mon"),
+        "prefill_sched_interval": form.get("sched_interval_hours", "24"),
+        "prefill_overlap": form.get("overlap", "asap"),
+    }
 
 
 _templates = {"count": 0, "checked": 0.0}
@@ -809,6 +1374,82 @@ def templates_update():
 
         threading.Thread(target=run, daemon=True).start()
     return redirect(url_for("index"))
+
+
+@app.route("/schedules", methods=["POST"])
+def schedule_create():
+    name = request.form.get("name", "").strip()
+    targets = request.form.get("targets", "").strip()
+    kind = request.form.get("kind", "daily")
+    time_s = request.form.get("time", "").strip()
+    weekday = request.form.get("weekday", "mon").strip().lower()
+    interval = request.form.get("interval_hours", "24").strip()
+    profile = request.form.get("profile", "standard")
+    client = request.form.get("client", "").strip()
+    enabled = request.form.get("enabled") == "on"
+    overlap = request.form.get("overlap", "asap")
+
+    sch, err = make_schedule(name, targets, client, kind, time_s, weekday,
+                             interval, profile, overlap, enabled)
+    if err:
+        session["flash"] = err
+        return redirect(url_for("index"))
+
+    with _sched_lock:
+        scheds = load_schedules()
+        scheds.append(sch)
+        save_schedules(scheds)
+    session["flash"] = f"Scheduled “{name}”."
+    return redirect(url_for("index"))
+
+
+@app.route("/schedules/<sid>/toggle", methods=["POST"])
+def schedule_toggle(sid):
+    with _sched_lock:
+        scheds = load_schedules()
+        for sch in scheds:
+            if sch.get("id") == sid:
+                sch["enabled"] = not sch.get("enabled", True)
+                if sch["enabled"]:
+                    ensure_next_run(sch)
+                save_schedules(scheds)
+                break
+    return redirect(url_for("index"))
+
+
+@app.route("/schedules/<sid>/delete", methods=["POST"])
+def schedule_delete(sid):
+    with _sched_lock:
+        scheds = load_schedules()
+        scheds = [s for s in scheds if s.get("id") != sid]
+        save_schedules(scheds)
+    return redirect(url_for("index"))
+
+
+@app.route("/schedules/<sid>/run", methods=["POST"])
+def schedule_run_now(sid):
+    """Launch a scheduled scan immediately, outside its schedule."""
+    sch = next((s for s in load_schedules() if s.get("id") == sid), None)
+    if sch is None:
+        session["flash"] = "That schedule no longer exists."
+        return redirect(url_for("index"))
+    targets = clean_targets(sch.get("targets", ""))
+    if not targets:
+        session["flash"] = "The schedule has no valid targets."
+        return redirect(url_for("index"))
+    opts = profile_opts(sch.get("profile", "standard"))
+    opts["_client"] = (sch.get("client") or "").strip()
+    opts["_schedule"] = sid
+    run_id = start_scan(targets, opts)
+    with _sched_lock:
+        scheds = load_schedules()
+        for s in scheds:
+            if s.get("id") == sid:
+                s["last_run"] = utcnow().isoformat()
+                s["last_run_id"] = run_id
+                s["note"] = None
+        save_schedules(scheds)
+    return redirect(url_for("scan_view", run_id=run_id))
 
 
 @app.route("/api/update-check")
@@ -940,19 +1581,37 @@ def reports_export():
         session["flash"] = "No reports selected."
         return redirect(url_for("index"))
 
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-        for rid in run_ids:
-            client = read_status(run_dir_for(rid)).get("client", "").strip()
-            safe = re.sub(r"[^A-Za-z0-9._-]+", "_", client).strip("_") if client else "report"
-            # rid is always unique, so the filename is too even if two scans
-            # share a client name.
-            zf.writestr(f"{safe}-{rid}.html", render_standalone_report(rid))
-    buf.seek(0)
+    fmt = request.form.get("fmt", "html")
+    if fmt not in EXPORT_FORMATS:
+        fmt = "html"
 
+    buf = export_archive(run_ids, fmt)
     ts = utcnow().strftime("%Y%m%d-%H%M%S")
     return send_file(buf, mimetype="application/zip", as_attachment=True,
-                     download_name=f"reports-{ts}.zip")
+                     download_name=f"reports-{fmt}-{ts}.zip")
+
+
+@app.route("/report/<run_id>/export/<fmt>")
+def report_export(run_id, fmt):
+    """A single run in one format, for one-off downloads from the report page.
+
+    CSV is two files (inventory + findings) so it downloads as a small zip,
+    matching what the bulk export produces.
+    """
+    if fmt not in EXPORT_FORMATS:
+        abort(404)
+    run_dir = run_dir_for(run_id)       # 404 for unknown run
+    client = (read_status(run_dir).get("client") or "report").strip()
+    safe = re.sub(r"[^A-Za-z0-9._-]+", "_", client).strip("_") or "report"
+
+    if fmt == "csv":
+        buf = export_archive([run_id], "csv")
+        return send_file(buf, mimetype="application/zip", as_attachment=True,
+                         download_name=f"{safe}-{run_id}-csv.zip")
+
+    data, mimetype = report_export_bytes(fmt, run_id)
+    return send_file(io.BytesIO(data), mimetype=mimetype, as_attachment=True,
+                     download_name=f"{safe}-{run_id}.{fmt}")
 
 
 @app.route("/reports/delete", methods=["POST"])
@@ -1015,11 +1674,37 @@ def api_scan(run_id):
 
 @app.route("/report/<run_id>")
 def report(run_id):
-    return render_template("report.html", r=build_report(run_id))
+    return render_template("report.html", r=build_report(run_id),
+                           others=other_runs(run_id))
+
+
+@app.route("/compare", methods=["POST"])
+def compare():
+    """Validate a two-run comparison and redirect to its page."""
+    a, b = request.form.get("run_a", "").strip(), request.form.get("run_b", "").strip()
+    for rid in (a, b):
+        if not RUN_ID_RE.match(rid) or not (OUTPUT_ROOT / f"scan-{rid}").is_dir():
+            session["flash"] = "Pick two existing scans to compare."
+            return redirect(url_for("index"))
+    if a == b:
+        session["flash"] = "Pick two different scans to compare."
+        return redirect(url_for("index"))
+    return redirect(url_for("diff_view", baseline=a, comparison=b))
+
+
+@app.route("/compare/<baseline>/<comparison>")
+def diff_view(baseline, comparison):
+    run_dir_for(baseline)
+    run_dir_for(comparison)
+    return render_template("diff.html", d=compare_runs(baseline, comparison))
 
 
 if __name__ == "__main__":
     reap_orphaned_runs()
+
+    # Recurring scans run from this thread; they are launched exactly like
+    # manual ones (same start_scan), so stop/purge/reporting all just work.
+    threading.Thread(target=scheduler_loop, daemon=True).start()
 
     port = int(os.environ.get("WEBUI_PORT", "8080"))
     ssl_context = None

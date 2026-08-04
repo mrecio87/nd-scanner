@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Scan comparison | {{ brand_name }}{% endblock %}
+{% block bodyclass %}report{% endblock %}
+
+{% block content %}
+
+<div class="report-head">
+  <h1 style="margin-top:18px">Scan comparison</h1>
+  <div class="meta">
+    {{ d.baseline.client or "Scan" }} · {{ d.baseline.started[:10] or d.baseline.run_id }}
+    &rarr; {{ d.comparison.started[:10] or d.comparison.run_id }}
+  </div>
+</div>
+
+<div class="no-print" style="margin-bottom:18px">
+  <a class="btn btn-secondary" href="{{ url_for('report', run_id=d.baseline.run_id) }}">Baseline report</a>
+  <a class="btn btn-secondary" href="{{ url_for('report', run_id=d.comparison.run_id) }}">Comparison report</a>
+</div>
+
+<p class="lede">
+  What changed between
+  <a href="{{ url_for('report', run_id=d.baseline.run_id) }}"><span class="mono">{{ d.baseline.run_id }}</span></a>
+  ({{ d.baseline.started[:16].replace("T", " ") }})
+  and
+  <a href="{{ url_for('report', run_id=d.comparison.run_id) }}"><span class="mono">{{ d.comparison.run_id }}</span></a>
+  ({{ d.comparison.started[:16].replace("T", " ") }}).
+  New means present in the comparison run but not the baseline.
+</p>
+
+<div class="tiles">
+  <div class="tile"><div class="n">{{ d.new_hosts|length }}</div><div class="k">New systems</div></div>
+  <div class="tile"><div class="n">{{ d.gone_hosts|length }}</div><div class="k">Systems gone</div></div>
+  <div class="tile"><div class="n">{{ d.new_findings|length }}</div><div class="k">New findings</div></div>
+  <div class="tile"><div class="n">{{ d.resolved_findings|length }}</div><div class="k">Resolved findings</div></div>
+</div>
+
+{# -------------------------------------------------------- new findings #}
+{% if d.new_findings %}
+<h2>New findings</h2>
+{% for f in d.new_findings %}
+<div class="finding">
+  <div class="finding-head">
+    <div class="finding-title">{{ f.name }}</div>
+    <span class="badge"><span class="sev-dot s-{{ f.severity }}"></span>{{ sev_label[f.severity] }}</span>
+  </div>
+  {% if f.description %}<p>{{ f.description }}</p>{% endif %}
+  <div class="assets">
+    {% for a in f.assets[:12] %}<span class="asset">{{ a }}</span>{% endfor %}
+    {% if f.assets|length > 12 %}<span class="asset">+{{ f.assets|length - 12 }} more</span>{% endif %}
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{# ------------------------------------------------------- resolved findings #}
+{% if d.resolved_findings %}
+<h2>Resolved findings</h2>
+{% for f in d.resolved_findings %}
+<div class="finding">
+  <div class="finding-head">
+    <div class="finding-title">{{ f.name }}</div>
+    <span class="badge"><span class="sev-dot s-{{ f.severity }}"></span>{{ sev_label[f.severity] }}</span>
+  </div>
+  <p>No longer detected in the comparison run.</p>
+</div>
+{% endfor %}
+{% endif %}
+
+{# -------------------------------------------------- changed finding scope #}
+{% if d.changed_findings %}
+<h2>Changed scope</h2>
+<p class="hint">These findings still exist, but moved to or from different hosts or URLs.</p>
+{% for f in d.changed_findings %}
+<div class="finding">
+  <div class="finding-head">
+    <div class="finding-title">{{ f.name }}</div>
+    <span class="badge"><span class="sev-dot s-{{ f.severity }}"></span>{{ sev_label[f.severity] }}</span>
+  </div>
+  {% if f.added %}
+  <div class="hint" style="margin-top:10px">Now also at:</div>
+  <div class="assets">{% for a in f.added %}<span class="asset">{{ a }}</span>{% endfor %}</div>
+  {% endif %}
+  {% if f.removed %}
+  <div class="hint" style="margin-top:10px">No longer at:</div>
+  <div class="assets">{% for a in f.removed %}<span class="asset">{{ a }}</span>{% endfor %}</div>
+  {% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+{# -------------------------------------------------------------- ports #}
+<h2>Ports that changed</h2>
+{% if d.host_rows %}
+<div class="card">
+  <table>
+    <tr><th>System</th><th>Newly open</th><th>No longer open</th></tr>
+    {% for h in d.host_rows %}
+    <tr>
+      <td class="mono" style="white-space:nowrap">{{ h.ip }}{% if h.hostname %}<br><span class="hint">{{ h.hostname }}</span>{% endif %}
+        {% if not h.present_baseline %}<span class="badge" style="margin-left:6px">new system</span>{% endif %}
+        {% if not h.present_comparison %}<span class="badge" style="margin-left:6px">gone</span>{% endif %}
+      </td>
+      <td class="mono">{% for p in h.new_ports %}<span class="port-change">{{ p }}</span>{% else %}–{% endfor %}</td>
+      <td class="mono">{% for p in h.closed_ports %}<span class="port-change closed">{{ p }}</span>{% else %}–{% endfor %}</td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% else %}
+<div class="card"><p class="empty">No open ports changed between these two runs.</p></div>
+{% endif %}
+
+<p class="hint" style="margin:26px 0 40px">
+  Findings are grouped by template. Ports come from naabu; services are best-effort.
+  Comparing scans of different networks will not give a meaningful answer.
+</p>
+{% endblock %}
