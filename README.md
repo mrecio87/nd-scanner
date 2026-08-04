@@ -112,6 +112,7 @@ Each run creates `output/scan-<UTC timestamp>/`:
 | `nmap/<host>.{nmap,xml,gnmap}` | Service and version detection per host |
 | `nuclei.jsonl` | Vulnerability findings (JSONL) |
 | `targets.txt` | Exactly what was scanned, for the engagement record |
+| `noprobe.tsv` | Ports found open but deliberately not probed (see `NOPROBE_PORTS` below) |
 
 # Configuration
 
@@ -140,6 +141,35 @@ Environment variables in `.env`. The defaults are conservative on purpose.
 | `NUCLEI_RATE` | `150` | Requests/sec |
 | `NUCLEI_UPDATE` | `false` | `true` refreshes templates before scanning |
 | `SKIP_NMAP` / `SKIP_NUCLEI` | `false` | Drop a stage |
+| `NOPROBE_PORTS` | `9100,9101,9102,9103,9104,9105,9106,9107,515` | Raw printing, always excluded. Comma-separated ports only — unlike `NAABU_PORTS`, ranges (`9100-9107`) are not supported |
+| `FRAGILE_ICS_PORTS` | `502,102,47808,44818,20000` | Industrial/building-automation ports, subject to `AVOID_FRAGILE_ICS` |
+| `AVOID_FRAGILE_ICS` | `true` | Set by the "Avoid Scanning Fragile Devices" checkbox; see below |
+
+Two kinds of port get excluded from nmap and nuclei entirely, because active
+probing itself is the danger, not just noise:
+
+- **Raw printing** (`NOPROBE_PORTS`: 9100-9107 JetDirect/AppSocket, 515 LPD)
+  has no request/response framing, so a device listening there prints
+  whatever bytes it receives. nmap's own `nmap-service-probes` file excludes
+  9100-9107 for this exact reason; nuclei has no equivalent protection, and a
+  live scan proved it — it printed gibberish until the printer ran out of
+  paper. Always excluded; there is no per-scan option to turn this off.
+- **Fragile industrial/building-automation protocols** (`FRAGILE_ICS_PORTS`:
+  502 Modbus, 102 Siemens S7comm, 47808 BACnet/IP, 44818 EtherNet/IP, 20000
+  DNP3) are documented to crash or hang from ordinary scan traffic — small
+  connection tables and thin input validation on PLCs mean even a routine
+  version-detection probe can take one offline. Unlike raw printing this is a
+  real tradeoff, not a clear-cut safety fix: excluding them also means
+  missing a legitimate finding if a client genuinely has an exposed,
+  unauthenticated control-system port. It is on by default (`AVOID_FRAGILE_ICS`)
+  and exposed as **Avoid Scanning Fragile Devices** on the new-scan form —
+  untick it for a specific engagement if you need those ports probed, and
+  schedules remember whichever choice was made when they were created.
+
+Either way, only naabu's own probe (no payload) ever touches an excluded
+port, and the report still flags it as an exposure worth fixing — the
+finding recommends network segmentation instead of a specific vulnerability,
+since none was safe to test for.
 
 `SCAN_TYPE=auto` checks every target against the appliance's own subnets. If all
 of them are directly attached it uses SYN scanning at the local rate, since

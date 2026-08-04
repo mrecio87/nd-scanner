@@ -73,6 +73,31 @@ SEVERITY_MEANING = {
     "info": "Observations about what is running. No action required.",
 }
 
+# scan.sh skips active probing (nmap -sV, nuclei) on these -- kept in sync
+# with scan.sh's own default for NOPROBE_PORTS. Two different reasons land a
+# port here: raw printing has no request/response framing, so a probe payload
+# is printed verbatim; the ICS/building-automation ports are fragile enough
+# that ordinary scan traffic has been documented to crash or hang them.
+RAW_PRINT_PORTS = {9100, 9101, 9102, 9103, 9104, 9105, 9106, 9107, 515}
+ICS_PORTS = {502, 102, 47808, 44818, 20000}
+
+RAW_PORT_LABELS = {
+    9100: "raw printing (JetDirect/AppSocket)",
+    9101: "raw printing (JetDirect/AppSocket)",
+    9102: "raw printing (JetDirect/AppSocket)",
+    9103: "raw printing (JetDirect/AppSocket)",
+    9104: "raw printing (JetDirect/AppSocket)",
+    9105: "raw printing (JetDirect/AppSocket)",
+    9106: "raw printing (JetDirect/AppSocket)",
+    9107: "raw printing (JetDirect/AppSocket)",
+    515: "LPD printing",
+    502: "Modbus TCP (industrial control)",
+    102: "Siemens S7comm (industrial control)",
+    47808: "BACnet/IP (building automation)",
+    44818: "EtherNet/IP CIP (industrial control)",
+    20000: "DNP3 (industrial control / utility SCADA)",
+}
+
 app = Flask(__name__)
 app.secret_key = os.environ.get("WEBUI_SECRET") or secrets.token_hex(32)
 app.config.update(
@@ -365,6 +390,21 @@ def count_vanished_ports(run_dir):
         if ip and d.get("port") is not None:
             naabu_open.add((ip, int(d["port"])))
 
+    # Ports scan.sh deliberately never handed to nmap (raw/print ports) will
+    # never show up as "confirmed" -- that is by design, not a sign the scan
+    # was blocked, so they must not count toward vanished/checkable.
+    noprobe = run_dir / "noprobe.tsv"
+    if noprobe.exists():
+        for line in noprobe.read_text(errors="replace").splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) != 2:
+                continue
+            ip, port_s = parts
+            try:
+                naabu_open.discard((ip, int(port_s)))
+            except ValueError:
+                pass
+
     checkable = {pair for pair in naabu_open if pair[0] in completed_hosts}
     if not checkable:
         return 0, 0
@@ -417,7 +457,8 @@ def start_scan(targets, opts):
     write_status(run_dir, state="running", started=utcnow().isoformat(),
                  targets=len(targets), client=opts.get("_client", ""),
                  profile=opts.get("_profile", ""),
-                 _schedule=opts.get("_schedule", ""))
+                 _schedule=opts.get("_schedule", ""),
+                 avoid_fragile_ics=opts.get("AVOID_FRAGILE_ICS", "true"))
 
     logf = open(run_dir / "scan.log", "wb")
     # New session, so the whole tool chain can be signaled as one group:
@@ -516,6 +557,26 @@ def parse_hosts(run_dir):
                         x for x in [svc.get("product"), svc.get("version")] if x)
                     pentry["extrainfo"] = svc.get("extrainfo") or ""
 
+    noprobe = run_dir / "noprobe.tsv"
+    if noprobe.exists():
+        for line in noprobe.read_text(errors="replace").splitlines():
+            parts = line.strip().split("\t")
+            if len(parts) != 2:
+                continue
+            ip, port_s = parts
+            try:
+                pn = int(port_s)
+            except ValueError:
+                continue
+            pentry = host_entry(ip)["ports"].setdefault(
+                pn, {"port": pn, "service": "", "product": "", "extrainfo": ""})
+            pentry["service"] = RAW_PORT_LABELS.get(pn, "raw/unprobed")
+            pentry["product"] = "not actively probed"
+            if pn in ICS_PORTS:
+                pentry["extrainfo"] = "documented to crash or hang on ordinary scan traffic, so probing is skipped"
+            else:
+                pentry["extrainfo"] = "sends any bytes it receives straight to output, so probing is skipped"
+
     out = {}
     for ip, h in sorted(hosts.items()):
         h["ports"] = sorted(h["ports"].values(), key=lambda e: e["port"])
@@ -572,6 +633,96 @@ def parse_findings(run_dir):
     return out
 
 
+def raw_port_findings(run_dir):
+    """Synthesized findings covering ports scan.sh deliberately never probed
+    (see NOPROBE_PORTS in scan.sh). Their exposure is that they answer at all
+    -- an actual version/vulnerability probe would itself trigger the crash or
+    the unwanted behavior being avoided, which is why nmap and nuclei never
+    touch them. Raw printing and fragile ICS ports get separate findings
+    because the risk and the fix are different.
+    """
+    noprobe = run_dir / "noprobe.tsv"
+    if not noprobe.exists():
+        return []
+
+    groups = {"print": {"assets": set(), "ips": set()}, "ics": {"assets": set(), "ips": set()}}
+    for line in noprobe.read_text(errors="replace").splitlines():
+        parts = line.strip().split("\t")
+        if len(parts) != 2:
+            continue
+        ip, port_s = parts
+        try:
+            pn = int(port_s)
+        except ValueError:
+            continue
+        key = "ics" if pn in ICS_PORTS else "print"
+        groups[key]["assets"].add(f"{ip}:{port_s}")
+        groups[key]["ips"].add(ip)
+
+    out = []
+    if groups["print"]["assets"]:
+        out.append({
+            "id": "raw-print-port-exposed",
+            "name": "Raw printing/serial port reachable without restriction",
+            "severity": "medium",
+            "description": (
+                "This port has no request/response protocol: any data sent to it "
+                "is acted on directly, most often printed verbatim by the device "
+                "on the other end. It was not tested directly because a version "
+                "or vulnerability probe would itself trigger that behavior -- the "
+                "exposure is that it answers at all. Anyone who can reach it, "
+                "including a workstation elsewhere on the network that has "
+                "already been compromised, can print arbitrary documents, "
+                "intercept or replay print jobs, or exhaust paper and toner as a "
+                "denial of service."
+            ),
+            "remediation": (
+                "Restrict reachability rather than the service itself: place "
+                "printers and similar raw-port devices on a dedicated VLAN "
+                "reachable only by an authorized print server (or the specific "
+                "hosts that need it), not the general user network. Prefer an "
+                "authenticated printing path, such as IPP over TLS through a "
+                "managed print server, over exposing the raw port directly, and "
+                "disable the port if it is not in active use."
+            ),
+            "tags": ["exposure", "network-segmentation"],
+            "assets": sorted(groups["print"]["assets"]),
+            "ips": sorted(groups["print"]["ips"]),
+        })
+    if groups["ics"]["assets"]:
+        out.append({
+            "id": "fragile-ics-port-exposed",
+            "name": "Industrial control / building-automation port reachable without restriction",
+            "severity": "high",
+            "description": (
+                "This port belongs to an industrial control or building-"
+                "automation protocol (Modbus, Siemens S7comm, BACnet/IP, "
+                "EtherNet/IP, or DNP3). These devices are documented to crash or "
+                "hang from ordinary scan traffic -- small connection tables and "
+                "minimal input validation mean even a routine version-detection "
+                "probe can take the device offline, so it was not tested "
+                "directly. The exposure itself is serious: if this network "
+                "segment is reachable from general office IT, a compromised "
+                "workstation could reach and disrupt physical equipment (HVAC, "
+                "manufacturing, access control, or utility gear) with no "
+                "authentication required."
+            ),
+            "remediation": (
+                "This almost always means IT and OT networks are not properly "
+                "separated. Put control-system devices on an isolated VLAN with "
+                "a firewall between it and the general network, allowing only "
+                "the specific engineering workstations and historian/SCADA "
+                "servers that need access. Do not rely on this scanner, or any "
+                "general-purpose IT scanner, to assess these devices further -- "
+                "use an OT-aware tool, and only during a maintenance window."
+            ),
+            "tags": ["exposure", "network-segmentation", "ics"],
+            "assets": sorted(groups["ics"]["assets"]),
+            "ips": sorted(groups["ics"]["ips"]),
+        })
+    return out
+
+
 def ip_sort_key(ip):
     """Numeric, not lexicographic: string-sorting IPs puts 10.1.20.100 before
     10.1.20.36 before 10.1.20.9, which is not the order a reader expects."""
@@ -617,7 +768,9 @@ def build_report(run_id):
     run_dir = run_dir_for(run_id)
     status = read_status(run_dir)
     hosts = parse_hosts(run_dir)
-    findings = parse_findings(run_dir)
+    findings = parse_findings(run_dir) + raw_port_findings(run_dir)
+    findings.sort(key=lambda g: (SEVERITY_ORDER.index(g["severity"]), -len(g["assets"]),
+                                 g["name"].lower()))
     hosts = attach_host_findings(hosts, findings)
 
     counts = {s: 0 for s in SEVERITY_ORDER}
@@ -1024,7 +1177,8 @@ def ensure_next_run(sch, reference=None):
 
 
 def make_schedule(name, targets, client, kind, time_s, weekday, interval,
-                  profile="standard", overlap="asap", enabled=True):
+                  profile="standard", overlap="asap", enabled=True,
+                  avoid_fragile=True):
     """Validate schedule settings and return (schedule, error). Either a
     schedule dict with a next_run, or None and a message for the UI. Shared by
     the scan form's "repeat" checkbox and the standalone schedule form."""
@@ -1064,6 +1218,7 @@ def make_schedule(name, targets, client, kind, time_s, weekday, interval,
         "profile": profile,
         "enabled": enabled,
         "overlap": overlap,
+        "avoid_fragile": avoid_fragile,
         "created": utcnow().isoformat(),
         "last_run": None, "last_run_id": None, "note": None,
         "next_run": None,
@@ -1161,6 +1316,7 @@ def tick_schedules():
             opts = profile_opts(sch.get("profile", "standard"))
             opts["_client"] = (sch.get("client") or "").strip()
             opts["_schedule"] = sch.get("id", "")
+            opts["AVOID_FRAGILE_ICS"] = "true" if sch.get("avoid_fragile", True) else "false"
             run_id = start_scan(targets, opts)
             sch["last_run"] = now.isoformat()
             sch["last_run_id"] = run_id
@@ -1255,7 +1411,8 @@ def render_index(error=None, prefill=None, status=200):
            "sched_kinds": SCHEDULE_KINDS,
            "weekdays": WEEKDAYS,
            "flash": session.pop("flash", None),
-           "error": error}
+           "error": error,
+           "prefill_avoid_fragile": True}
     ctx.update(prefill or {})
     return render_template("index.html", **ctx), status
 
@@ -1275,7 +1432,8 @@ def rescan(run_id):
     targets = tf.read_text(errors="replace").strip() if tf.exists() else ""
     return render_index(prefill={"prefill_targets": targets,
                                  "prefill_client": status.get("client", ""),
-                                 "prefill_profile": status.get("profile", "standard")})
+                                 "prefill_profile": status.get("profile", "standard"),
+                                 "prefill_avoid_fragile": status.get("avoid_fragile_ics", "true") == "true"})
 
 
 @app.route("/scan", methods=["POST"])
@@ -1292,6 +1450,10 @@ def scan():
 
     profile = request.form.get("profile", "standard")
     client = request.form.get("client", "").strip()
+    # Unchecked checkboxes are simply absent from form data; the field
+    # defaults to checked in the template, so absence here only happens if
+    # the operator deliberately unticked it.
+    avoid_fragile = request.form.get("avoid_fragile") == "on"
 
     # Scheduling a repeat: create a schedule instead of launching right now.
     # The first run happens at the next occurrence, so the operator sees the
@@ -1305,7 +1467,8 @@ def scan():
             request.form.get("sched_weekday", "mon").strip().lower(),
             request.form.get("sched_interval_hours", "24"),
             profile,
-            request.form.get("overlap", "asap"))
+            request.form.get("overlap", "asap"),
+            avoid_fragile=avoid_fragile)
         if err:
             return render_index(error=err, prefill=form_prefill(request.form), status=400)
         with _sched_lock:
@@ -1315,7 +1478,8 @@ def scan():
         session["flash"] = f"Scheduled “{sch['name']}”. First run at the next occurrence."
         return redirect(url_for("index"))
 
-    opts = {"_client": client, "_profile": profile}
+    opts = {"_client": client, "_profile": profile,
+            "AVOID_FRAGILE_ICS": "true" if avoid_fragile else "false"}
     opts.update(profile_opts(profile))
 
     run_id = start_scan(targets, opts)
@@ -1328,6 +1492,7 @@ def form_prefill(form):
         "prefill_targets": form.get("targets", ""),
         "prefill_client": form.get("client", ""),
         "prefill_profile": form.get("profile", "standard"),
+        "prefill_avoid_fragile": form.get("avoid_fragile") == "on",
         "prefill_schedule": form.get("schedule") == "on",
         "prefill_sched_name": form.get("sched_name", ""),
         "prefill_sched_kind": form.get("sched_kind", "daily"),
@@ -1440,6 +1605,7 @@ def schedule_run_now(sid):
     opts = profile_opts(sch.get("profile", "standard"))
     opts["_client"] = (sch.get("client") or "").strip()
     opts["_schedule"] = sid
+    opts["AVOID_FRAGILE_ICS"] = "true" if sch.get("avoid_fragile", True) else "false"
     run_id = start_scan(targets, opts)
     with _sched_lock:
         scheds = load_schedules()

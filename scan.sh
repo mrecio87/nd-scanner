@@ -141,15 +141,66 @@ if [ ! -s "$NAABU_JSON" ]; then
     exit 0
 fi
 
-# host<TAB>comma,separated,ports
+# Raw printing (9100-9107 JetDirect/AppSocket, 515 LPD): no request/response
+# framing, so whatever bytes a client sends get put on paper. nmap's own
+# nmap-service-probes ships an "Exclude T:9100-9107" line for exactly this
+# reason. nuclei has no such protection -- a test scan here sent nuclei's
+# template set at a live printer and it printed gibberish until it ran out of
+# paper. Always excluded; not offered as a scan-time choice.
+NOPROBE_PORTS="${NOPROBE_PORTS:-9100,9101,9102,9103,9104,9105,9106,9107,515}"
+
+# Fragile industrial/building-automation protocols (502 Modbus, 102 Siemens
+# S7comm, 47808 BACnet/IP, 44818 EtherNet/IP CIP, 20000 DNP3): documented to
+# crash or hang on ordinary scan traffic -- small connection tables and
+# minimal input validation mean even a routine version-detection probe, let
+# alone a vulnerability template, can take a PLC offline. Unlike raw printing
+# this is an operator choice (the "Avoid Scanning Fragile Devices" checkbox
+# in the web UI): excluding them loses a legitimate finding if the client
+# really does have an exposed, unauthenticated control-system port, so
+# AVOID_FRAGILE_ICS defaults to on but can be turned off per scan.
+FRAGILE_ICS_PORTS="${FRAGILE_ICS_PORTS:-502,102,47808,44818,20000}"
+AVOID_FRAGILE_ICS="${AVOID_FRAGILE_ICS:-true}"
+
+EFFECTIVE_NOPROBE_PORTS="$NOPROBE_PORTS"
+if [ "$AVOID_FRAGILE_ICS" = "true" ]; then
+    EFFECTIVE_NOPROBE_PORTS="$EFFECTIVE_NOPROBE_PORTS,$FRAGILE_ICS_PORTS"
+fi
+
+# naabu's own discovery probe sends no payload either way, so these still get
+# reported as open; they just never reach nmap or nuclei.
+NOPROBE_JSON="$(printf '%s' "$EFFECTIVE_NOPROBE_PORTS" | tr ',' '\n' | sed '/^$/d' | jq -R 'tonumber' | jq -cs .)"
+
+NAABU_PROBE_JSON="$RUN_DIR/naabu-probe.json"
+NOPROBE_TSV="$RUN_DIR/noprobe.tsv"
+jq -c --argjson np "$NOPROBE_JSON" \
+    '.port as $p | select(($np | index($p)) | not)' \
+    "$NAABU_JSON" > "$NAABU_PROBE_JSON"
+jq -r --argjson np "$NOPROBE_JSON" \
+    '.port as $p | select($np | index($p)) | [(.ip // .host), (.port|tostring)] | @tsv' \
+    "$NAABU_JSON" | sort -u > "$NOPROBE_TSV"
+
+if [ -s "$NOPROBE_TSV" ]; then
+    log "excluded $(count "$NOPROBE_TSV") result(s) on raw/print or fragile-device ports from active probing (avoid_fragile_ics=$AVOID_FRAGILE_ICS)"
+fi
+
+# host<TAB>comma,separated,ports -- built from the probe-safe set only, so
+# nmap and nuclei below never see a noprobe port. ALL_HOSTPORTS keeps every
+# discovered port, including noprobe ones, for the human-readable summary.
 HOSTPORTS="$RUN_DIR/hostports.tsv"
-jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_JSON" \
+jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_PROBE_JSON" \
     | sort -u \
     | awk -F'\t' '{ports[$1] = (ports[$1] == "" ? $2 : ports[$1] "," $2)}
                   END {for (h in ports) print h "\t" ports[h]}' \
     > "$HOSTPORTS"
 
-log "discovered $(count "$NAABU_JSON") open ports across $(count "$HOSTPORTS") hosts"
+ALL_HOSTPORTS="$RUN_DIR/hostports-all.tsv"
+jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_JSON" \
+    | sort -u \
+    | awk -F'\t' '{ports[$1] = (ports[$1] == "" ? $2 : ports[$1] "," $2)}
+                  END {for (h in ports) print h "\t" ports[h]}' \
+    > "$ALL_HOSTPORTS"
+
+log "discovered $(count "$NAABU_JSON") open ports across $(count "$HOSTPORTS") hosts safe to actively probe"
 
 # ---------------------------------------------------------------- nmap
 
@@ -169,9 +220,9 @@ fi
 
 # ---------------------------------------------------------------- nuclei
 
-if [ "$SKIP_NUCLEI" != "true" ]; then
+if [ "$SKIP_NUCLEI" != "true" ] && [ -s "$NAABU_PROBE_JSON" ]; then
     NUCLEI_TARGETS="$RUN_DIR/nuclei-targets.txt"
-    jq -r '[(.ip // .host), (.port|tostring)] | join(":")' "$NAABU_JSON" | sort -u > "$NUCLEI_TARGETS"
+    jq -r '[(.ip // .host), (.port|tostring)] | join(":")' "$NAABU_PROBE_JSON" | sort -u > "$NUCLEI_TARGETS"
 
     if [ "$NUCLEI_UPDATE" = "true" ]; then
         log "refreshing nuclei templates"
@@ -192,8 +243,10 @@ if [ "$SKIP_NUCLEI" != "true" ]; then
 
     log "stage 3/3: nuclei against $(count "$NUCLEI_TARGETS") host:port pairs (severity=$NUCLEI_SEVERITY)"
     nuclei "${nuclei_args[@]}" || log "nuclei exited non-zero, continuing"
-else
+elif [ "$SKIP_NUCLEI" = "true" ]; then
     log "stage 3/3: nuclei skipped (SKIP_NUCLEI=true)"
+else
+    log "stage 3/3: nuclei skipped (every discovered port is a raw/print port excluded from probing)"
 fi
 
 # ---------------------------------------------------------------- summary
@@ -202,8 +255,12 @@ SUMMARY="$RUN_DIR/summary.txt"
 {
     printf 'nd-scanner run %s\n' "$RUN_ID"
     printf 'targets:      %s\n' "$(count "$RESOLVED_TARGETS")"
-    printf 'hosts up:     %s\n' "$(count "$HOSTPORTS")"
+    printf 'hosts up:     %s\n' "$(jq -r '(.ip // .host)' "$NAABU_JSON" | sort -u | wc -l)"
     printf 'open ports:   %s\n' "$(count "$NAABU_JSON")"
+    if [ -s "$NOPROBE_TSV" ]; then
+        printf 'ports excluded from active probing: %s (raw/print=%s; fragile ICS/building-automation devices avoided=%s)\n' \
+            "$(count "$NOPROBE_TSV")" "$NOPROBE_PORTS" "$AVOID_FRAGILE_ICS"
+    fi
     if [ -s "$RUN_DIR/nuclei.jsonl" ]; then
         printf 'findings:     %s\n\n' "$(count "$RUN_DIR/nuclei.jsonl")"
         printf 'findings by severity:\n'
@@ -215,7 +272,7 @@ SUMMARY="$RUN_DIR/summary.txt"
         printf 'findings:     0\n'
     fi
     printf '\nopen ports by host:\n'
-    sed 's/^/  /' "$HOSTPORTS"
+    sed 's/^/  /' "$ALL_HOSTPORTS"
 } > "$SUMMARY"
 
 cat "$SUMMARY"

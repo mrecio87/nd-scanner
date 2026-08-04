@@ -54,6 +54,20 @@ git pull
       </div>
     </div>
 
+    <div class="field">
+      <label class="confirm">
+        <input type="checkbox" name="avoid_fragile" id="avoid-fragile" {% if prefill_avoid_fragile %}checked{% endif %}>
+        Avoid Scanning Fragile Devices
+      </label>
+      <div class="hint">Skips active probing (nmap and vulnerability checks) of
+        industrial-control and building-automation ports — Modbus, Siemens S7,
+        BACnet, EtherNet/IP, DNP3 — which are documented to crash or hang
+        fragile PLCs from ordinary scan traffic. They are still reported as
+        open and flagged as a finding recommending network segmentation, just
+        not tested directly. Leave this on unless you specifically need those
+        devices probed.</div>
+    </div>
+
     <div class="schedule-opt">
       <label class="confirm">
         <input type="checkbox" name="schedule" id="scan-schedule" {% if prefill_schedule %}checked{% endif %}>
