@@ -35,6 +35,42 @@ NUCLEI_UPDATE="${NUCLEI_UPDATE:-false}"
 SKIP_NMAP="${SKIP_NMAP:-false}"
 SKIP_NUCLEI="${SKIP_NUCLEI:-false}"
 
+# Raw printing (9100-9107 JetDirect/AppSocket, 515 LPD): no request/response
+# framing, so whatever bytes a client sends get put on paper. nmap's own
+# nmap-service-probes ships an "Exclude T:9100-9107" line for exactly this
+# reason -- and that Exclude directive keeps nmap from sending ANY probe to
+# the port, not just -sV ones. A live scan proved the same caution applies to
+# plain port discovery too: even naabu's payload-free SYN/connect probe was
+# enough to make a real printer print gibberish until it ran out of paper
+# (confirmed against a synthetic listener that received zero bytes -- real
+# JetDirect firmware is far less well-behaved than a test socket). So naabu
+# itself is now told to skip these ports outright via -exclude-ports; nothing
+# this scanner sends ever reaches them. Always excluded; not a scan-time
+# choice. Because naabu no longer touches the port, this scan also cannot
+# confirm whether it is actually open on any given host -- see
+# noprobe-policy.json / the report's scope note instead of a per-host finding.
+NOPROBE_PORTS="${NOPROBE_PORTS:-9100,9101,9102,9103,9104,9105,9106,9107,515}"
+
+# Fragile industrial/building-automation protocols (502 Modbus, 102 Siemens
+# S7comm, 47808 BACnet/IP, 44818 EtherNet/IP CIP, 20000 DNP3): documented to
+# crash or hang on ordinary scan traffic -- small connection tables and
+# minimal input validation mean even a routine version-detection probe, let
+# alone a vulnerability template, can take a PLC offline. Unlike raw printing
+# this is an operator choice (the "Avoid Scanning Fragile Devices" checkbox
+# in the web UI): excluding them loses a legitimate finding if the client
+# really does have an exposed, unauthenticated control-system port, so
+# AVOID_FRAGILE_ICS defaults to on but can be turned off per scan. When on,
+# these ports are excluded from naabu itself for the same reason as raw
+# printing above -- the checkbox means "avoid scanning", not "avoid deep
+# scanning".
+FRAGILE_ICS_PORTS="${FRAGILE_ICS_PORTS:-502,102,47808,44818,20000}"
+AVOID_FRAGILE_ICS="${AVOID_FRAGILE_ICS:-true}"
+
+EFFECTIVE_NOPROBE_PORTS="$NOPROBE_PORTS"
+if [ "$AVOID_FRAGILE_ICS" = "true" ]; then
+    EFFECTIVE_NOPROBE_PORTS="$EFFECTIVE_NOPROBE_PORTS,$FRAGILE_ICS_PORTS"
+fi
+
 log() { printf '[%s] %s\n' "$(date -u +%H:%M:%S)" "$*"; }
 die() { printf '[!] %s\n' "$*" >&2; exit 1; }
 
@@ -95,6 +131,7 @@ naabu_args=(
     -rate "$NAABU_RATE"
     -c "$NAABU_CONCURRENCY"
     -scan-type "$SCAN_TYPE"
+    -exclude-ports "$EFFECTIVE_NOPROBE_PORTS"
 )
 if [ -n "$NAABU_PORTS" ]; then
     naabu_args+=( -p "$NAABU_PORTS" )
@@ -102,7 +139,7 @@ else
     naabu_args+=( -top-ports "$NAABU_TOP_PORTS" )
 fi
 
-log "stage 1/3: naabu port discovery (rate=$NAABU_RATE type=$SCAN_TYPE)"
+log "stage 1/3: naabu port discovery (rate=$NAABU_RATE type=$SCAN_TYPE); raw/print ports never touched (avoid_fragile_ics=$AVOID_FRAGILE_ICS)"
 naabu_rc=0
 naabu "${naabu_args[@]}" || naabu_rc=$?
 
@@ -141,66 +178,27 @@ if [ ! -s "$NAABU_JSON" ]; then
     exit 0
 fi
 
-# Raw printing (9100-9107 JetDirect/AppSocket, 515 LPD): no request/response
-# framing, so whatever bytes a client sends get put on paper. nmap's own
-# nmap-service-probes ships an "Exclude T:9100-9107" line for exactly this
-# reason. nuclei has no such protection -- a test scan here sent nuclei's
-# template set at a live printer and it printed gibberish until it ran out of
-# paper. Always excluded; not offered as a scan-time choice.
-NOPROBE_PORTS="${NOPROBE_PORTS:-9100,9101,9102,9103,9104,9105,9106,9107,515}"
-
-# Fragile industrial/building-automation protocols (502 Modbus, 102 Siemens
-# S7comm, 47808 BACnet/IP, 44818 EtherNet/IP CIP, 20000 DNP3): documented to
-# crash or hang on ordinary scan traffic -- small connection tables and
-# minimal input validation mean even a routine version-detection probe, let
-# alone a vulnerability template, can take a PLC offline. Unlike raw printing
-# this is an operator choice (the "Avoid Scanning Fragile Devices" checkbox
-# in the web UI): excluding them loses a legitimate finding if the client
-# really does have an exposed, unauthenticated control-system port, so
-# AVOID_FRAGILE_ICS defaults to on but can be turned off per scan.
-FRAGILE_ICS_PORTS="${FRAGILE_ICS_PORTS:-502,102,47808,44818,20000}"
-AVOID_FRAGILE_ICS="${AVOID_FRAGILE_ICS:-true}"
-
-EFFECTIVE_NOPROBE_PORTS="$NOPROBE_PORTS"
-if [ "$AVOID_FRAGILE_ICS" = "true" ]; then
-    EFFECTIVE_NOPROBE_PORTS="$EFFECTIVE_NOPROBE_PORTS,$FRAGILE_ICS_PORTS"
-fi
-
-# naabu's own discovery probe sends no payload either way, so these still get
-# reported as open; they just never reach nmap or nuclei.
-NOPROBE_JSON="$(printf '%s' "$EFFECTIVE_NOPROBE_PORTS" | tr ',' '\n' | sed '/^$/d' | jq -R 'tonumber' | jq -cs .)"
-
-NAABU_PROBE_JSON="$RUN_DIR/naabu-probe.json"
-NOPROBE_TSV="$RUN_DIR/noprobe.tsv"
-jq -c --argjson np "$NOPROBE_JSON" \
-    '.port as $p | select(($np | index($p)) | not)' \
-    "$NAABU_JSON" > "$NAABU_PROBE_JSON"
-jq -r --argjson np "$NOPROBE_JSON" \
-    '.port as $p | select($np | index($p)) | [(.ip // .host), (.port|tostring)] | @tsv' \
-    "$NAABU_JSON" | sort -u > "$NOPROBE_TSV"
-
-if [ -s "$NOPROBE_TSV" ]; then
-    log "excluded $(count "$NOPROBE_TSV") result(s) on raw/print or fragile-device ports from active probing (avoid_fragile_ics=$AVOID_FRAGILE_ICS)"
-fi
-
-# host<TAB>comma,separated,ports -- built from the probe-safe set only, so
-# nmap and nuclei below never see a noprobe port. ALL_HOSTPORTS keeps every
-# discovered port, including noprobe ones, for the human-readable summary.
+# naabu was told (via -exclude-ports, above) to never touch raw/print or
+# (if avoid_fragile_ics) fragile-ICS ports at all, so every port in
+# NAABU_JSON at this point is already safe to actively probe -- there is
+# nothing left to filter out here.
 HOSTPORTS="$RUN_DIR/hostports.tsv"
-jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_PROBE_JSON" \
+jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_JSON" \
     | sort -u \
     | awk -F'\t' '{ports[$1] = (ports[$1] == "" ? $2 : ports[$1] "," $2)}
                   END {for (h in ports) print h "\t" ports[h]}' \
     > "$HOSTPORTS"
 
-ALL_HOSTPORTS="$RUN_DIR/hostports-all.tsv"
-jq -r '[(.ip // .host), (.port|tostring)] | @tsv' "$NAABU_JSON" \
-    | sort -u \
-    | awk -F'\t' '{ports[$1] = (ports[$1] == "" ? $2 : ports[$1] "," $2)}
-                  END {for (h in ports) print h "\t" ports[h]}' \
-    > "$ALL_HOSTPORTS"
+# Record what was excluded so the report can note it as a scope limitation.
+# Nothing in naabu.json can answer "was it actually open" any more -- naabu
+# never touched the port, so this is a policy record, not an observation.
+NOPROBE_POLICY="$RUN_DIR/noprobe-policy.json"
+jq -n --arg print_ports "$NOPROBE_PORTS" --arg ics_ports "$FRAGILE_ICS_PORTS" \
+      --argjson avoid_ics "$([ "$AVOID_FRAGILE_ICS" = "true" ] && printf true || printf false)" \
+    '{raw_print_ports: $print_ports, fragile_ics_ports: $ics_ports, avoid_fragile_ics: $avoid_ics}' \
+    > "$NOPROBE_POLICY"
 
-log "discovered $(count "$NAABU_JSON") open ports across $(count "$HOSTPORTS") hosts safe to actively probe"
+log "discovered $(count "$NAABU_JSON") open ports across $(count "$HOSTPORTS") hosts (raw/print ports never touched; fragile ICS ports also skipped when avoid_fragile_ics=true)"
 
 # ---------------------------------------------------------------- nmap
 
@@ -220,9 +218,9 @@ fi
 
 # ---------------------------------------------------------------- nuclei
 
-if [ "$SKIP_NUCLEI" != "true" ] && [ -s "$NAABU_PROBE_JSON" ]; then
+if [ "$SKIP_NUCLEI" != "true" ]; then
     NUCLEI_TARGETS="$RUN_DIR/nuclei-targets.txt"
-    jq -r '[(.ip // .host), (.port|tostring)] | join(":")' "$NAABU_PROBE_JSON" | sort -u > "$NUCLEI_TARGETS"
+    jq -r '[(.ip // .host), (.port|tostring)] | join(":")' "$NAABU_JSON" | sort -u > "$NUCLEI_TARGETS"
 
     if [ "$NUCLEI_UPDATE" = "true" ]; then
         log "refreshing nuclei templates"
@@ -243,10 +241,8 @@ if [ "$SKIP_NUCLEI" != "true" ] && [ -s "$NAABU_PROBE_JSON" ]; then
 
     log "stage 3/3: nuclei against $(count "$NUCLEI_TARGETS") host:port pairs (severity=$NUCLEI_SEVERITY)"
     nuclei "${nuclei_args[@]}" || log "nuclei exited non-zero, continuing"
-elif [ "$SKIP_NUCLEI" = "true" ]; then
-    log "stage 3/3: nuclei skipped (SKIP_NUCLEI=true)"
 else
-    log "stage 3/3: nuclei skipped (every discovered port is a raw/print port excluded from probing)"
+    log "stage 3/3: nuclei skipped (SKIP_NUCLEI=true)"
 fi
 
 # ---------------------------------------------------------------- summary
@@ -257,10 +253,9 @@ SUMMARY="$RUN_DIR/summary.txt"
     printf 'targets:      %s\n' "$(count "$RESOLVED_TARGETS")"
     printf 'hosts up:     %s\n' "$(jq -r '(.ip // .host)' "$NAABU_JSON" | sort -u | wc -l)"
     printf 'open ports:   %s\n' "$(count "$NAABU_JSON")"
-    if [ -s "$NOPROBE_TSV" ]; then
-        printf 'ports excluded from active probing: %s (raw/print=%s; fragile ICS/building-automation devices avoided=%s)\n' \
-            "$(count "$NOPROBE_TSV")" "$NOPROBE_PORTS" "$AVOID_FRAGILE_ICS"
-    fi
+    printf 'ports never scanned (not probed at all, not even for discovery): raw/print=%s; fragile ICS/building-automation=%s (avoided=%s)\n' \
+        "$NOPROBE_PORTS" "$FRAGILE_ICS_PORTS" "$AVOID_FRAGILE_ICS"
+    printf 'note: a host whose only open port is one of the above will not appear in this scan at all.\n'
     if [ -s "$RUN_DIR/nuclei.jsonl" ]; then
         printf 'findings:     %s\n\n' "$(count "$RUN_DIR/nuclei.jsonl")"
         printf 'findings by severity:\n'
@@ -272,7 +267,7 @@ SUMMARY="$RUN_DIR/summary.txt"
         printf 'findings:     0\n'
     fi
     printf '\nopen ports by host:\n'
-    sed 's/^/  /' "$ALL_HOSTPORTS"
+    sed 's/^/  /' "$HOSTPORTS"
 } > "$SUMMARY"
 
 cat "$SUMMARY"

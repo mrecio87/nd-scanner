@@ -73,14 +73,13 @@ SEVERITY_MEANING = {
     "info": "Observations about what is running. No action required.",
 }
 
-# scan.sh skips active probing (nmap -sV, nuclei) on these -- kept in sync
-# with scan.sh's own default for NOPROBE_PORTS. Two different reasons land a
-# port here: raw printing has no request/response framing, so a probe payload
-# is printed verbatim; the ICS/building-automation ports are fragile enough
-# that ordinary scan traffic has been documented to crash or hang them.
-RAW_PRINT_PORTS = {9100, 9101, 9102, 9103, 9104, 9105, 9106, 9107, 515}
-ICS_PORTS = {502, 102, 47808, 44818, 20000}
-
+# scan.sh tells naabu to never send a packet to these ports at all (see
+# -exclude-ports in scan.sh) -- raw printing has no request/response framing,
+# so any probe is printed verbatim, and a live incident showed even a bare
+# port-discovery touch was enough to trigger that on real hardware; the
+# ICS/building-automation ports are fragile enough that ordinary scan
+# traffic has been documented to crash or hang them. Used only to label the
+# scope-note finding built from each run's noprobe-policy.json.
 RAW_PORT_LABELS = {
     9100: "raw printing (JetDirect/AppSocket)",
     9101: "raw printing (JetDirect/AppSocket)",
@@ -390,21 +389,9 @@ def count_vanished_ports(run_dir):
         if ip and d.get("port") is not None:
             naabu_open.add((ip, int(d["port"])))
 
-    # Ports scan.sh deliberately never handed to nmap (raw/print ports) will
-    # never show up as "confirmed" -- that is by design, not a sign the scan
-    # was blocked, so they must not count toward vanished/checkable.
-    noprobe = run_dir / "noprobe.tsv"
-    if noprobe.exists():
-        for line in noprobe.read_text(errors="replace").splitlines():
-            parts = line.strip().split("\t")
-            if len(parts) != 2:
-                continue
-            ip, port_s = parts
-            try:
-                naabu_open.discard((ip, int(port_s)))
-            except ValueError:
-                pass
-
+    # Raw/print and (if avoid_fragile_ics) fragile-ICS ports never reach
+    # naabu.json at all now -- naabu itself is told to skip them via
+    # -exclude-ports in scan.sh -- so there is nothing to subtract here.
     checkable = {pair for pair in naabu_open if pair[0] in completed_hosts}
     if not checkable:
         return 0, 0
@@ -557,25 +544,11 @@ def parse_hosts(run_dir):
                         x for x in [svc.get("product"), svc.get("version")] if x)
                     pentry["extrainfo"] = svc.get("extrainfo") or ""
 
-    noprobe = run_dir / "noprobe.tsv"
-    if noprobe.exists():
-        for line in noprobe.read_text(errors="replace").splitlines():
-            parts = line.strip().split("\t")
-            if len(parts) != 2:
-                continue
-            ip, port_s = parts
-            try:
-                pn = int(port_s)
-            except ValueError:
-                continue
-            pentry = host_entry(ip)["ports"].setdefault(
-                pn, {"port": pn, "service": "", "product": "", "extrainfo": ""})
-            pentry["service"] = RAW_PORT_LABELS.get(pn, "raw/unprobed")
-            pentry["product"] = "not actively probed"
-            if pn in ICS_PORTS:
-                pentry["extrainfo"] = "documented to crash or hang on ordinary scan traffic, so probing is skipped"
-            else:
-                pentry["extrainfo"] = "sends any bytes it receives straight to output, so probing is skipped"
+    # Raw/print and (if avoid_fragile_ics) fragile-ICS ports are never handed
+    # to naabu at all any more (see -exclude-ports in scan.sh), so there is
+    # no per-host row to synthesize here -- this scan simply has no evidence
+    # either way for those ports on any host. See raw_port_findings() for the
+    # scan-wide scope note that replaces the old per-host entry.
 
     out = {}
     for ip, h in sorted(hosts.items()):
@@ -633,93 +606,117 @@ def parse_findings(run_dir):
     return out
 
 
-def raw_port_findings(run_dir):
-    """Synthesized findings covering ports scan.sh deliberately never probed
-    (see NOPROBE_PORTS in scan.sh). Their exposure is that they answer at all
-    -- an actual version/vulnerability probe would itself trigger the crash or
-    the unwanted behavior being avoided, which is why nmap and nuclei never
-    touch them. Raw printing and fragile ICS ports get separate findings
-    because the risk and the fix are different.
-    """
-    noprobe = run_dir / "noprobe.tsv"
-    if not noprobe.exists():
-        return []
-
-    groups = {"print": {"assets": set(), "ips": set()}, "ics": {"assets": set(), "ips": set()}}
-    for line in noprobe.read_text(errors="replace").splitlines():
-        parts = line.strip().split("\t")
-        if len(parts) != 2:
+def _policy_port_list(csv_ports):
+    out = []
+    for p in (csv_ports or "").split(","):
+        p = p.strip()
+        if not p:
             continue
-        ip, port_s = parts
         try:
-            pn = int(port_s)
+            out.append(int(p))
         except ValueError:
             continue
-        key = "ics" if pn in ICS_PORTS else "print"
-        groups[key]["assets"].add(f"{ip}:{port_s}")
-        groups[key]["ips"].add(ip)
+    return out
+
+
+def _policy_port_labels(ports):
+    seen = []
+    for p in ports:
+        label = RAW_PORT_LABELS.get(p, str(p))
+        if label not in seen:
+            seen.append(label)
+    return ", ".join(seen)
+
+
+def raw_port_findings(run_dir):
+    """Scope-note findings for ports this run's naabu never touched at all
+    (see -exclude-ports in scan.sh, driven by noprobe-policy.json). Unlike a
+    normal finding these are not built from anything observed -- naabu was
+    told to skip the port outright, on the same reasoning nmap's own
+    Exclude directive uses, so this scan has no evidence either way about
+    whether it is actually open on any host. That is the point: an actual
+    probe is itself what causes the damage being avoided.
+    """
+    policy_path = run_dir / "noprobe-policy.json"
+    if not policy_path.exists():
+        return []
+    try:
+        policy = json.loads(policy_path.read_text())
+    except ValueError:
+        return []
 
     out = []
-    if groups["print"]["assets"]:
+    print_ports = _policy_port_list(policy.get("raw_print_ports"))
+    if print_ports:
         out.append({
-            "id": "raw-print-port-exposed",
-            "name": "Raw printing/serial port reachable without restriction",
-            "severity": "medium",
+            "id": "raw-print-ports-not-scanned",
+            "name": f"Raw printing/serial ports ({_policy_port_labels(print_ports)}) intentionally not scanned",
+            "severity": "info",
             "description": (
-                "This port has no request/response protocol: any data sent to it "
-                "is acted on directly, most often printed verbatim by the device "
-                "on the other end. It was not tested directly because a version "
-                "or vulnerability probe would itself trigger that behavior -- the "
-                "exposure is that it answers at all. Anyone who can reach it, "
-                "including a workstation elsewhere on the network that has "
-                "already been compromised, can print arbitrary documents, "
-                "intercept or replay print jobs, or exhaust paper and toner as a "
-                "denial of service."
+                "These ports have no request/response protocol: any data sent "
+                "to one is acted on directly, most often printed verbatim by "
+                "the device on the other end. This scanner never sends them "
+                "a packet of any kind, including for basic port discovery -- "
+                "a live incident showed that even a payload-free scan can "
+                "make real printer hardware print gibberish until it runs out "
+                "of paper. Because of that, this report cannot say whether "
+                "any host in the target range actually exposes one of these "
+                "ports; it is a standing scope limitation, not a confirmed "
+                "finding."
             ),
             "remediation": (
-                "Restrict reachability rather than the service itself: place "
-                "printers and similar raw-port devices on a dedicated VLAN "
-                "reachable only by an authorized print server (or the specific "
-                "hosts that need it), not the general user network. Prefer an "
-                "authenticated printing path, such as IPP over TLS through a "
-                "managed print server, over exposing the raw port directly, and "
-                "disable the port if it is not in active use."
+                "If printers or similar raw-port devices are known to be on "
+                "this network, restrict reachability rather than relying on "
+                "this scanner to test the service: place them on a dedicated "
+                "VLAN reachable only by an authorized print server (or the "
+                "specific hosts that need them), not the general user "
+                "network. Prefer an authenticated printing path, such as IPP "
+                "over TLS through a managed print server, over exposing the "
+                "raw port directly, and disable the port if it is not in "
+                "active use."
             ),
-            "tags": ["exposure", "network-segmentation"],
-            "assets": sorted(groups["print"]["assets"]),
-            "ips": sorted(groups["print"]["ips"]),
+            "tags": ["scope-note", "network-segmentation"],
+            "assets": [],
+            "ips": [],
         })
-    if groups["ics"]["assets"]:
-        out.append({
-            "id": "fragile-ics-port-exposed",
-            "name": "Industrial control / building-automation port reachable without restriction",
-            "severity": "high",
-            "description": (
-                "This port belongs to an industrial control or building-"
-                "automation protocol (Modbus, Siemens S7comm, BACnet/IP, "
-                "EtherNet/IP, or DNP3). These devices are documented to crash or "
-                "hang from ordinary scan traffic -- small connection tables and "
-                "minimal input validation mean even a routine version-detection "
-                "probe can take the device offline, so it was not tested "
-                "directly. The exposure itself is serious: if this network "
-                "segment is reachable from general office IT, a compromised "
-                "workstation could reach and disrupt physical equipment (HVAC, "
-                "manufacturing, access control, or utility gear) with no "
-                "authentication required."
-            ),
-            "remediation": (
-                "This almost always means IT and OT networks are not properly "
-                "separated. Put control-system devices on an isolated VLAN with "
-                "a firewall between it and the general network, allowing only "
-                "the specific engineering workstations and historian/SCADA "
-                "servers that need access. Do not rely on this scanner, or any "
-                "general-purpose IT scanner, to assess these devices further -- "
-                "use an OT-aware tool, and only during a maintenance window."
-            ),
-            "tags": ["exposure", "network-segmentation", "ics"],
-            "assets": sorted(groups["ics"]["assets"]),
-            "ips": sorted(groups["ics"]["ips"]),
-        })
+
+    if policy.get("avoid_fragile_ics"):
+        ics_ports = _policy_port_list(policy.get("fragile_ics_ports"))
+        if ics_ports:
+            out.append({
+                "id": "fragile-ics-ports-not-scanned",
+                "name": f"Industrial control / building-automation ports ({_policy_port_labels(ics_ports)}) intentionally not scanned",
+                "severity": "info",
+                "description": (
+                    "These ports belong to industrial control or building-"
+                    "automation protocols (Modbus, Siemens S7comm, BACnet/IP, "
+                    "EtherNet/IP, or DNP3). Such devices are documented to "
+                    "crash or hang from ordinary scan traffic -- small "
+                    "connection tables and minimal input validation mean "
+                    "even a routine port-discovery touch can take one "
+                    "offline. This run had \"Avoid Scanning Fragile Devices\" "
+                    "enabled, so this scanner never sent these ports a "
+                    "packet of any kind. This report cannot say whether any "
+                    "host in the target range actually exposes one of these "
+                    "ports; it is a standing scope limitation, not a "
+                    "confirmed finding. Re-run with that option off, during a "
+                    "maintenance window, to test them directly."
+                ),
+                "remediation": (
+                    "If control-system or building-automation devices are "
+                    "known to be on this network, confirm IT and OT are "
+                    "properly separated: put them on an isolated VLAN with a "
+                    "firewall between it and the general network, allowing "
+                    "only the specific engineering workstations and "
+                    "historian/SCADA servers that need access. Do not rely "
+                    "on this scanner, or any general-purpose IT scanner, to "
+                    "assess these devices further -- use an OT-aware tool, "
+                    "and only during a maintenance window."
+                ),
+                "tags": ["scope-note", "network-segmentation", "ics"],
+                "assets": [],
+                "ips": [],
+            })
     return out
 
 
